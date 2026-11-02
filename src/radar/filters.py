@@ -85,6 +85,15 @@ def _normalize_company(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", name.casefold()).split())
 
 
+_PLACE_ABBREVIATIONS = {"mt": "mount", "pt": "port", "st": "saint"}
+
+
+def _normalize_place(name: str) -> str:
+    """Treat "Mt. Kisco"/"Mount Kisco" and "Hastings-on-Hudson"/"Hastings on Hudson" as equal."""
+    words = re.sub(r"[^a-z0-9]+", " ", name.casefold()).split()
+    return " ".join(_PLACE_ABBREVIATIONS.get(word, word) for word in words)
+
+
 def _state_code(text: str) -> str | None:
     candidate = text.strip()
     if candidate.upper() in US_STATES:
@@ -98,7 +107,7 @@ class LocationClassifier:
         self._us_names = {name.lower() for name in settings.us_country_names}
         self._in_person_states = {state.upper() for state in settings.in_person_states}
         self._in_person_cities = {
-            state.upper(): {city.lower() for city in cities}
+            state.upper(): {_normalize_place(city) for city in cities}
             for state, cities in settings.in_person_cities.items()
         }
 
@@ -124,7 +133,7 @@ class LocationClassifier:
         if state in self._in_person_states:
             return LocationKind.IN_PERSON
         cities = self._in_person_cities.get(state, set())
-        if any(part.lower() in cities for part in parts[:-1]):
+        if any(_normalize_place(part) in cities for part in parts[:-1]):
             return LocationKind.IN_PERSON
         return LocationKind.OTHER_US
 

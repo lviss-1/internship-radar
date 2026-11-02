@@ -23,7 +23,7 @@ LOCATION_COLORS = {
     LocationKind.OTHER_US: 0x95A5A6,
 }
 LOCATION_LABELS = {
-    LocationKind.IN_PERSON: "In person (NYC/NJ/CT)",
+    LocationKind.IN_PERSON: "In person (NYC area/NJ/CT)",
     LocationKind.REMOTE_US: "Remote (US)",
     LocationKind.OTHER_US: "Other US (needs relocation)",
 }

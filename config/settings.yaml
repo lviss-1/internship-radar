@@ -85,8 +85,12 @@ locations:
   in_person_states:
     - NJ
     - CT
+  # NY places within about an hour (off-peak drive or direct Metro-North/LIRR)
+  # of Midtown or Mount Vernon. Matching ignores case, hyphens and periods,
+  # and treats "Mt"/"Pt" as "Mount"/"Port".
   in_person_cities:
     NY:
+      # NYC
       - New York
       - New York City
       - Manhattan
@@ -96,6 +100,107 @@ locations:
       - The Bronx
       - Staten Island
       - Long Island City
+      - Astoria
+      - Flushing
+      - Jamaica
+      - Forest Hills
+      - Williamsburg
+      - Dumbo
+      # Westchester
+      - Mount Vernon
+      - Yonkers
+      - New Rochelle
+      - Pelham
+      - Bronxville
+      - Tuckahoe
+      - Eastchester
+      - Scarsdale
+      - Hartsdale
+      - White Plains
+      - Harrison
+      - Purchase
+      - Rye
+      - Rye Brook
+      - Port Chester
+      - Mamaroneck
+      - Larchmont
+      - Elmsford
+      - Ardsley
+      - Dobbs Ferry
+      - Hastings on Hudson
+      - Irvington
+      - Tarrytown
+      - Sleepy Hollow
+      - Valhalla
+      - Hawthorne
+      - Thornwood
+      - Pleasantville
+      - Chappaqua
+      - Armonk
+      - Mount Kisco
+      - Bedford
+      - Katonah
+      - Briarcliff Manor
+      - Ossining
+      - Croton on Hudson
+      - Yorktown Heights
+      - Somers
+      - Cortlandt Manor
+      - Peekskill
+      # Putnam
+      - Carmel
+      - Mahopac
+      - Brewster
+      - Cold Spring
+      # Rockland
+      - Nyack
+      - West Nyack
+      - Nanuet
+      - Pearl River
+      - New City
+      - Orangeburg
+      - Blauvelt
+      - Tappan
+      - Piermont
+      - Congers
+      - Spring Valley
+      - Suffern
+      - Haverstraw
+      - Stony Point
+      # Nassau
+      - Hempstead
+      - Garden City
+      - Mineola
+      - Westbury
+      - Hicksville
+      - Jericho
+      - Syosset
+      - Woodbury
+      - Plainview
+      - Bethpage
+      - Great Neck
+      - Manhasset
+      - Port Washington
+      - Roslyn
+      - Glen Cove
+      - Oyster Bay
+      - Lake Success
+      - New Hyde Park
+      - Floral Park
+      - Valley Stream
+      - Elmont
+      - Uniondale
+      - East Meadow
+      - Levittown
+      - Freeport
+      - Rockville Centre
+      - Oceanside
+      - Long Beach
+      - Massapequa
+      # Western Suffolk
+      - Melville
+      - Huntington
+      - Farmingdale
   aliases:
     NYC: New York, NY
     SF: San Francisco, CA
