@@ -1,0 +1,65 @@
+name: radar
+
+on:
+  schedule:
+    # Off the top of the hour (GitHub's busiest time) and a few minutes after
+    # Simplify's own :01/:31 feed commits.
+    - cron: "7,37 * * * *"
+    # Daily heartbeat, 13:17 UTC = 08:17 EST / 09:17 EDT.
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+    inputs:
+      heartbeat:
+        description: Also post the heartbeat
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: radar
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out state branch
+        uses: actions/checkout@v7
+        with:
+          ref: state
+          path: .state
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: uv sync --locked --no-dev
+
+      - name: Run radar
+        id: radar
+        env:
+          DISCORD_WEBHOOK_MATCHES: ${{ secrets.DISCORD_WEBHOOK_MATCHES }}
+          DISCORD_WEBHOOK_ERRORS: ${{ secrets.DISCORD_WEBHOOK_ERRORS }}
+          HEARTBEAT: ${{ github.event.schedule == '17 13 * * *' || inputs.heartbeat == true }}
+        run: |
+          args=(--state-dir .state --push-state)
+          if [ "$HEARTBEAT" = "true" ]; then args+=(--heartbeat); fi
+          uv run --no-sync radar "${args[@]}"
+
+      # The radar step reports its own failures; this covers steps before it.
+      - name: Report setup failure
+        if: failure() && steps.radar.outcome != 'failure'
+        env:
+          DISCORD_WEBHOOK_ERRORS: ${{ secrets.DISCORD_WEBHOOK_ERRORS }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          payload=$(jq -n --arg url "$RUN_URL" \
+            '{username: "Internship Radar", allowed_mentions: {parse: []},
+              content: ("Internship Radar error: workflow failed before the radar ran. " + $url)}')
+          curl -fsS -o /dev/null -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_ERRORS"

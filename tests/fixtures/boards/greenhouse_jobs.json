@@ -1,0 +1,25 @@
+{
+ "jobs": [
+  {
+   "id": 8331970,
+   "title": "Chief of Staff",
+   "company_name": "SeatGeek",
+   "absolute_url": "https://seatgeek.com/jobs/8331970?gh_jid=8331970"
+  },
+  {
+   "id": 8108835,
+   "title": "Client Success Manager",
+   "company_name": "SeatGeek",
+   "absolute_url": "https://seatgeek.com/jobs/8108835?gh_jid=8108835"
+  },
+  {
+   "id": 8108805,
+   "title": "Client Success Manager",
+   "company_name": "SeatGeek",
+   "absolute_url": "https://seatgeek.com/jobs/8108805?gh_jid=8108805"
+  }
+ ],
+ "meta": {
+  "total": 3
+ }
+}

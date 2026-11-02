@@ -1,0 +1,56 @@
+# Company names only. Board types and slugs are discovered and verified by
+# scripts/probe_boards.py, which writes config/watchlist.yaml.
+# `aliases` are other names the company posts under; they are used only to
+# confirm a board belongs to the company, never as slugs.
+
+core:
+  - name: Databricks
+  - name: Datadog
+  - name: Ramp
+  - name: Robinhood
+  - name: Uber
+  - name: DoorDash
+  - name: Stripe
+  - name: SeatGeek
+  - name: Boeing
+  - name: Pinterest
+  - name: Figma
+  - name: Canva
+  - name: Netflix
+  - name: YouTube
+  - name: LinkedIn
+  - name: GitHub
+  - name: MongoDB
+
+extras:
+  - name: Plaid
+  - name: Coinbase
+  - name: Block
+    aliases: [Square, Cash App]
+  - name: Affirm
+  - name: Brex
+  - name: Etsy
+  - name: Squarespace
+  - name: Peloton
+  - name: Zocdoc
+  - name: Betterment
+  - name: Cloudflare
+  - name: Twilio
+  - name: Okta
+  - name: Snowflake
+  - name: Asana
+  - name: Dropbox
+  - name: Notion
+  - name: GitLab
+  - name: Airbnb
+  - name: Lyft
+  - name: Instacart
+    aliases: [Maplebear]
+  - name: Reddit
+  - name: Discord
+  - name: Duolingo
+  - name: Scale AI
+  - name: Anduril
+    aliases: [Anduril Industries]
+  - name: Rippling
+  - name: Gusto

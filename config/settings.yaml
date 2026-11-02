@@ -1,0 +1,110 @@
+sources:
+  simplify:
+    url: https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json
+    max_invalid_ratio: 0.05
+
+delivery:
+  max_post_age_hours: 72
+  max_posts_per_run: 25
+
+thresholds:
+  post: 60
+  ping: 80
+
+quiet_hours:
+  timezone: America/New_York
+  start: "01:00"
+  end: "07:00"
+
+models:
+  cheap: claude-haiku-5-5
+  strong: claude-sonnet-5-5
+
+budget:
+  daily_api_call_cap: 200
+  monthly_usd_hard_cap: 15
+  monthly_usd_target: 10
+
+watchlist_path: config/watchlist.yaml
+
+excluded_companies:
+  - Palantir
+  - Anthropic
+
+filters:
+  seasons:
+    - Spring 2027
+    - Summer 2027
+    - Fall 2027
+  unconfirmed_season_terms:
+    - N/A
+  curated_intern_sources:
+    - simplify
+  intern_title_keywords:
+    - intern
+    - interns
+    - internship
+    - co-op
+    - coop
+    - apprentice
+    - apprenticeship
+    - student
+  non_intern_title_keywords:
+    - new grad
+    - senior
+    - staff
+    - principal
+  excluded_categories:
+    - quant
+    - quantitative finance
+    - hardware
+    - hardware engineering
+  excluded_title_keywords:
+    - quant
+    - quantitative trading
+    - quantitative trader
+    - quantitative research
+    - quantitative researcher
+    - quantitative developer
+    - quantitative development
+    - quantitative analyst
+    - quantitative analytics
+    - quantitative strategies
+    - trader
+    - hardware engineer
+    - hardware engineering
+    - hardware design
+    - electrical engineer
+    - electrical engineering
+    - fpga
+    - asic
+    - silicon
+    - pcb
+
+locations:
+  in_person_states:
+    - NJ
+    - CT
+  in_person_cities:
+    NY:
+      - New York
+      - New York City
+      - Manhattan
+      - Brooklyn
+      - Queens
+      - Bronx
+      - The Bronx
+      - Staten Island
+      - Long Island City
+  aliases:
+    NYC: New York, NY
+    SF: San Francisco, CA
+    South SF: South San Francisco, CA
+    LA: Los Angeles, CA
+  us_country_names:
+    - us
+    - usa
+    - u.s.
+    - u.s.a.
+    - united states
+    - united states of america

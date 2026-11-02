@@ -1,0 +1,26 @@
+{
+ "apiVersion": "1",
+ "jobs": [
+  {
+   "id": "34413f8d-26bf-4bbc-8ade-eb309a0e2245",
+   "title": " Security Engineer, Cloud",
+   "isListed": true,
+   "jobUrl": "https://jobs.ashbyhq.com/ramp/34413f8d-26bf-4bbc-8ade-eb309a0e2245",
+   "descriptionPlain": "ABOUT RAMP\n\nRamp is building the smart infrastructure for finance teams, embedded in the transaction flow of every dollar a business spends. We automate how over $275B in annualized spend flows in and out of 85,000+ companies: authorizing payments, flagging risk, categorizing spend, and closing book"
+  },
+  {
+   "id": "f564dcf9-9390-4a3f-896f-8047a5086040",
+   "title": "Mobile Engineer, Android",
+   "isListed": true,
+   "jobUrl": "https://jobs.ashbyhq.com/ramp/f564dcf9-9390-4a3f-896f-8047a5086040",
+   "descriptionPlain": "ABOUT RAMP\n\nRamp is building the smart infrastructure for finance teams, embedded in the transaction flow of every dollar a business spends. We automate how over $275B in annualized spend flows in and out of 85,000+ companies: authorizing payments, flagging risk, categorizing spend, and closing book"
+  },
+  {
+   "id": "4e64ab86-4e30-403b-b1b9-41dc052570ce",
+   "title": "Software Engineer, Frontend",
+   "isListed": true,
+   "jobUrl": "https://jobs.ashbyhq.com/ramp/4e64ab86-4e30-403b-b1b9-41dc052570ce",
+   "descriptionPlain": "ABOUT RAMP\n\nRamp is building the smart infrastructure for finance teams, embedded in the transaction flow of every dollar a business spends. We automate how over $275B in annualized spend flows in and out of 85,000+ companies: authorizing payments, flagging risk, categorizing spend, and closing book"
+  }
+ ]
+}
