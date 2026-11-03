@@ -195,7 +195,8 @@
  },
  "radar_minutes": {
   "simplify": [
-   59.4
+   59.4,
+   42.5
   ],
   "ashby": [
    14.8
