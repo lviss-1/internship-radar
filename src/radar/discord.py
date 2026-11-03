@@ -5,13 +5,16 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from radar.filters import LocationKind, Match
+from radar.delivery import Decision, Evaluation
+from radar.filters import LocationKind
 from radar.net import NetworkError, request_with_retries
 
 SUPPRESS_NOTIFICATIONS = 1 << 12
 TITLE_LIMIT = 256
 FIELD_LIMIT = 1024
 CONTENT_LIMIT = 2000
+DESCRIPTION_LIMIT = 4096
+EMBED_TOTAL_LIMIT = 5900
 USERNAME = "Internship Radar"
 WEBHOOK_HOSTS = frozenset(
     {"discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"}
@@ -94,35 +97,115 @@ class DiscordWebhook:
             self._sleep(min(reset_after, 30.0))
 
 
-def _field(name: str, value: str) -> dict[str, Any]:
-    return {"name": name, "value": _truncate(value, FIELD_LIMIT), "inline": True}
+def _field(name: str, value: str, *, inline: bool = True) -> dict[str, Any]:
+    return {"name": name, "value": _truncate(value, FIELD_LIMIT), "inline": inline}
 
 
-def match_payload(match: Match) -> dict[str, Any]:
-    posting = match.posting
-    fields = [
-        _field("Location", ", ".join(posting.locations) or "Unknown"),
-        _field("Fit", LOCATION_LABELS[match.location_kind]),
-        _field("Season", ", ".join(posting.terms) or "N/A"),
-        _field("Posted", f"<t:{int(posting.posted_at.timestamp())}:R>"),
-    ]
-    if match.tags:
-        fields.append(_field("Tags", ", ".join(match.tags)))
+def _bullets(items: list[str]) -> str:
+    return "\n".join(f"• {item}" for item in items)
 
+
+def _embed_size(embed: dict[str, Any]) -> int:
+    fields = embed.get("fields", [])
+    return (
+        len(embed.get("title", ""))
+        + len(embed.get("description", ""))
+        + len(embed.get("footer", {}).get("text", ""))
+        + sum(len(f["name"]) + len(f["value"]) for f in fields)
+    )
+
+
+def _shrink_to_fit(embed: dict[str, Any]) -> dict[str, Any]:
+    """Discord rejects a message whose embeds total more than 6000 characters, so trim the
+    longest text slot until the embed fits."""
+    slots = [(item, "value") for item in embed.get("fields", [])]
+    if embed.get("description"):
+        slots.append((embed, "description"))
+    while slots and (overflow := _embed_size(embed) - EMBED_TOTAL_LIMIT) > 0:
+        container, key = max(slots, key=lambda slot: len(slot[0][slot[1]]))
+        current = container[key]
+        trimmed = _truncate(current, max(20, len(current) - overflow))
+        if trimmed == current:
+            break
+        container[key] = trimmed
+    return embed
+
+
+def _posting_embed(evaluation: Evaluation, title_prefix: str = "") -> dict[str, Any]:
+    posting = evaluation.match.posting
     footer = posting.source if not posting.category else f"{posting.source} · {posting.category}"
-    embed = {
-        "title": _truncate(f"{posting.company} — {posting.title}", TITLE_LIMIT),
+    return {
+        "title": _truncate(f"{title_prefix}{posting.company} — {posting.title}", TITLE_LIMIT),
         "url": str(posting.url),
-        "color": LOCATION_COLORS[match.location_kind],
-        "fields": fields,
+        "color": LOCATION_COLORS[evaluation.match.location_kind],
         "footer": {"text": footer},
         "timestamp": posting.posted_at.isoformat(),
     }
-    return {
+
+
+def score_card_payload(
+    evaluation: Evaluation, decision: Decision, ping_user_id: str | None
+) -> dict[str, Any]:
+    match = evaluation.match
+    posting = match.posting
+    score = evaluation.score
+    headline = (
+        f"{score.score}/100 · {score.resume.upper()} resume"
+        if score
+        else f"Unscored ({evaluation.unscored_reason or 'unknown'})"
+    )
+    fields = [
+        _field("Score", headline),
+        _field("Fit", LOCATION_LABELS[match.location_kind]),
+        _field("Location", ", ".join(posting.locations) or "Unknown"),
+        _field("Season", ", ".join(posting.terms) or "N/A"),
+        _field("Posted", f"<t:{int(posting.posted_at.timestamp())}:R>"),
+    ]
+    if score and score.reasons:
+        fields.append(_field("Why it fits", _bullets(score.reasons), inline=False))
+    if score and score.gaps:
+        fields.append(_field("Gaps", _bullets(score.gaps), inline=False))
+    if score and score.eligibility_flags:
+        fields.append(_field("Eligibility flags", _bullets(score.eligibility_flags), inline=False))
+    if decision.tags:
+        fields.append(_field("Tags", ", ".join(decision.tags), inline=False))
+
+    embed = _shrink_to_fit({**_posting_embed(evaluation), "fields": fields})
+    mention = ping_user_id if decision.ping and ping_user_id else None
+    payload: dict[str, Any] = {
         "username": USERNAME,
         "embeds": [embed],
+        "allowed_mentions": {"parse": [], "users": [mention] if mention else []},
+        "flags": SUPPRESS_NOTIFICATIONS if decision.silent else 0,
+    }
+    if mention:
+        payload["content"] = f"<@{mention}>"
+    return payload
+
+
+def drafts_payload(evaluation: Evaluation) -> dict[str, Any]:
+    drafts = evaluation.drafts
+    if drafts is None:
+        raise ValueError("evaluation has no drafts")
+    fields = [_field("Referral message", drafts.referral_message, inline=False)]
+    for number, edit in enumerate(drafts.resume_edits, start=1):
+        text = f"**Original:** {edit.original}\n**Suggested:** {edit.suggested}"
+        if edit.why:
+            text += f"\n**Why:** {edit.why}"
+        fields.append(_field(f"Resume edit {number}", text, inline=False))
+    if not drafts.resume_edits:
+        fields.append(_field("Resume edits", "No grounded edits suggested.", inline=False))
+
+    embed = {
+        **_posting_embed(evaluation, title_prefix="Drafts: "),
+        "description": _truncate(f"**Cover note**\n{drafts.cover_note}", DESCRIPTION_LIMIT),
+        "fields": fields,
+    }
+    return {
+        "username": USERNAME,
+        "embeds": [_shrink_to_fit(embed)],
         "allowed_mentions": {"parse": []},
-        "flags": SUPPRESS_NOTIFICATIONS if match.silent else 0,
+        "flags": SUPPRESS_NOTIFICATIONS,
     }
 
 

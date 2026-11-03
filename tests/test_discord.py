@@ -4,17 +4,30 @@ import httpx
 import pytest
 import respx
 
+from radar.delivery import Decision, Evaluation
 from radar.discord import (
     SUPPRESS_NOTIFICATIONS,
     TITLE_LIMIT,
     DiscordError,
     DiscordWebhook,
-    match_payload,
+    drafts_payload,
+    score_card_payload,
     text_payload,
 )
-from radar.filters import LocationKind, Match, Tag
+from radar.drafts import DraftResult, ResumeEdit
+from radar.filters import LocationKind, Match
 from radar.net import make_client
+from radar.scoring import ScoreResult
 from tests.conftest import WEBHOOK_URL, make_posting
+
+SCORE = ScoreResult(
+    resume="swe",
+    score=91,
+    reasons=["Python services", "NYC office"],
+    gaps=["No Kubernetes"],
+    relocation_mentioned=False,
+    eligibility_flags=["graduating 2027 only"],
+)
 
 SECRET_FRAGMENT = "test-token"
 
@@ -105,34 +118,87 @@ def test_network_failure_does_not_leak_url() -> None:
     assert SECRET_FRAGMENT not in str(error.value.__cause__)
 
 
-def test_match_payload_for_local_role() -> None:
-    match = Match(make_posting(), LocationKind.IN_PERSON)
-
-    payload = match_payload(match)
-
-    embed = payload["embeds"][0]
-    assert payload["flags"] == 0
-    assert payload["allowed_mentions"] == {"parse": []}
-    assert embed["title"] == "Example Co — Software Engineer Intern"
-    assert embed["url"] == "https://example.com/jobs/1"
-    assert {field["name"] for field in embed["fields"]} == {"Location", "Fit", "Season", "Posted"}
+def scored_evaluation(**overrides: object) -> Evaluation:
+    fields: dict[str, object] = {
+        "match": Match(make_posting(), LocationKind.IN_PERSON),
+        "description_found": True,
+        "score": SCORE,
+    }
+    fields.update(overrides)
+    return Evaluation(**fields)  # type: ignore[arg-type]
 
 
-def test_match_payload_for_relocation_role_is_silent_and_tagged() -> None:
-    match = Match(
-        make_posting(locations=["Austin, TX"], terms=["N/A"]),
-        LocationKind.OTHER_US,
-        (Tag.SEASON_UNCONFIRMED, Tag.RELOCATION_UNKNOWN),
+def embed_size(embed: dict) -> int:
+    return (
+        len(embed["title"])
+        + len(embed.get("description", ""))
+        + len(embed["footer"]["text"])
+        + sum(len(f["name"]) + len(f["value"]) for f in embed["fields"])
     )
 
-    payload = match_payload(match)
 
-    tags = next(f for f in payload["embeds"][0]["fields"] if f["name"] == "Tags")
+def test_ping_mentions_only_the_configured_user() -> None:
+    decision = Decision(post=True, silent=False, ping=True, tags=())
+
+    payload = score_card_payload(scored_evaluation(), decision, "123456789")
+
+    assert payload["content"] == "<@123456789>"
+    assert payload["allowed_mentions"] == {"parse": [], "users": ["123456789"]}
+    assert payload["flags"] == 0
+
+
+def test_score_card_without_ping_mentions_nobody() -> None:
+    decision = Decision(post=True, silent=True, ping=False, tags=("no relocation mentioned",))
+
+    payload = score_card_payload(scored_evaluation(), decision, "123456789")
+
+    names = [f["name"] for f in payload["embeds"][0]["fields"]]
+    assert "content" not in payload
+    assert payload["allowed_mentions"] == {"parse": [], "users": []}
     assert payload["flags"] == SUPPRESS_NOTIFICATIONS
-    assert tags["value"] == "season unconfirmed, relocation unknown"
+    assert names == [
+        "Score", "Fit", "Location", "Season", "Posted",
+        "Why it fits", "Gaps", "Eligibility flags", "Tags",
+    ]  # fmt: skip
+    assert payload["embeds"][0]["fields"][0]["value"] == "91/100 · SWE resume"
 
 
-def test_match_payload_truncates_long_titles() -> None:
-    match = Match(make_posting(title="Intern " * 100), LocationKind.IN_PERSON)
+def test_unscored_card_states_the_reason() -> None:
+    item = scored_evaluation(score=None, unscored_reason="refused")
 
-    assert len(match_payload(match)["embeds"][0]["title"]) == TITLE_LIMIT
+    payload = score_card_payload(item, Decision(post=True, tags=("unscored",)), None)
+
+    fields = payload["embeds"][0]["fields"]
+    assert fields[0]["value"] == "Unscored (refused)"
+    assert "Why it fits" not in [f["name"] for f in fields]
+
+
+def test_long_titles_are_truncated() -> None:
+    item = scored_evaluation(
+        match=Match(make_posting(title="Intern " * 100), LocationKind.IN_PERSON)
+    )
+
+    payload = score_card_payload(item, Decision(post=True), None)
+
+    assert len(payload["embeds"][0]["title"]) == TITLE_LIMIT
+
+
+def test_drafts_payload_fits_discord_limits_at_maximum_sizes() -> None:
+    edits = [ResumeEdit(original="o" * 600, suggested="s" * 600, why="w" * 300)] * 5
+    drafts = DraftResult(resume_edits=edits, cover_note="c" * 1500, referral_message="r" * 800)
+
+    payload = drafts_payload(scored_evaluation(drafts=drafts))
+
+    embed = payload["embeds"][0]
+    assert embed_size(embed) <= 6000
+    assert all(len(f["value"]) <= 1024 for f in embed["fields"])
+    assert payload["flags"] == SUPPRESS_NOTIFICATIONS
+    assert payload["allowed_mentions"] == {"parse": []}
+
+
+def test_drafts_payload_says_when_no_edits_survived() -> None:
+    drafts = DraftResult(resume_edits=[], cover_note="note", referral_message="hi")
+
+    fields = drafts_payload(scored_evaluation(drafts=drafts))["embeds"][0]["fields"]
+
+    assert fields[-1]["value"] == "No grounded edits suggested."

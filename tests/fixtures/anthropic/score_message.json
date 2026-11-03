@@ -1,0 +1,26 @@
+{
+ "id": "msg_test",
+ "type": "message",
+ "role": "assistant",
+ "model": "claude-haiku-5-5",
+ "content": [
+  {
+   "type": "thinking",
+   "thinking": "",
+   "signature": "sig"
+  },
+  {
+   "type": "text",
+   "text": "{\"resume\": \"swe\", \"score\": 86, \"reasons\": [\"Python backend work matches the resume\"], \"gaps\": [\"No Go experience\"], \"relocation_mentioned\": false, \"eligibility_flags\": []}"
+  }
+ ],
+ "stop_reason": "end_turn",
+ "stop_sequence": null,
+ "stop_details": null,
+ "usage": {
+  "input_tokens": 1200,
+  "output_tokens": 400,
+  "cache_read_input_tokens": 2400,
+  "cache_creation_input_tokens": 0
+ }
+}

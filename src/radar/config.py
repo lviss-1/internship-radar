@@ -1,6 +1,6 @@
 from datetime import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -44,6 +44,28 @@ class ModelSettings(StrictModel):
     strong: str
 
 
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+
+
+class ScoringSettings(StrictModel):
+    max_description_chars: int = Field(gt=0)
+    score_effort: Effort
+    score_max_tokens: int = Field(gt=0)
+    draft_effort: Effort
+    draft_max_tokens: int = Field(gt=0)
+    request_timeout_seconds: float = Field(gt=0)
+    worst_case_input_tokens: int = Field(gt=0)
+
+
+class ModelPrice(StrictModel):
+    """USD per million tokens."""
+
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+    cache_read: float = Field(ge=0)
+    cache_write: float = Field(ge=0)
+
+
 class BudgetSettings(StrictModel):
     daily_api_call_cap: int = Field(gt=0)
     monthly_usd_hard_cap: float = Field(gt=0)
@@ -84,6 +106,8 @@ class Settings(StrictModel):
     thresholds: Thresholds
     quiet_hours: QuietHours
     models: ModelSettings
+    scoring: ScoringSettings
+    pricing: dict[str, ModelPrice]
     budget: BudgetSettings
     watchlist_path: Path
     excluded_companies: list[str]
@@ -95,6 +119,14 @@ class ConfigError(Exception):
     pass
 
 
+def _check_cross_fields(settings: Settings) -> None:
+    if settings.thresholds.ping < settings.thresholds.post:
+        raise ConfigError("thresholds.ping must be >= thresholds.post")
+    missing = {settings.models.cheap, settings.models.strong} - settings.pricing.keys()
+    if missing:
+        raise ConfigError(f"pricing is missing models: {sorted(missing)}")
+
+
 def load_settings(path: Path = DEFAULT_SETTINGS_PATH) -> Settings:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -104,6 +136,8 @@ def load_settings(path: Path = DEFAULT_SETTINGS_PATH) -> Settings:
         raise ConfigError(f"settings file {path} is not valid YAML") from exc
 
     try:
-        return Settings.model_validate(raw)
+        settings = Settings.model_validate(raw)
     except ValidationError as exc:
         raise ConfigError(f"settings file {path} is invalid:\n{exc}") from exc
+    _check_cross_fields(settings)
+    return settings

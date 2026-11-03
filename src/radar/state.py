@@ -3,13 +3,18 @@ import logging
 import os
 import subprocess
 import tempfile
+from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
+
+from pydantic import BaseModel, Field, ValidationError
 
 log = logging.getLogger(__name__)
 
-STATE_VERSION = 1
-STATE_FILENAME = "seen.json"
+SEEN_VERSION = 2
+SEEN_FILENAME = "seen.json"
+USAGE_FILENAME = "usage.json"
 GIT_TIMEOUT_SECONDS = 60
 BOT_NAME = "github-actions[bot]"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
@@ -19,52 +24,121 @@ class StateError(Exception):
     pass
 
 
-def load_ids(path: Path) -> set[str]:
-    """Load posted IDs. A missing file means a first run; a corrupt file errors, never resets."""
-    if not path.exists():
-        return set()
+class UsageLedger(BaseModel):
+    """Month-to-date API spend and today's call count. Numbers only, safe for a public repo."""
+
+    version: Literal[1] = 1
+    month: str = ""
+    month_usd: float = Field(default=0.0, ge=0)
+    day: str = ""
+    day_calls: int = Field(default=0, ge=0)
+    budget_alert_day: str = ""
+
+    def roll(self, today: date) -> None:
+        """Reset counters when the month or day changed since the last run."""
+        month = today.strftime("%Y-%m")
+        if self.month != month:
+            self.month, self.month_usd = month, 0.0
+        if self.day != today.isoformat():
+            self.day, self.day_calls = today.isoformat(), 0
+
+    def record(self, usd: float) -> None:
+        self.month_usd = round(self.month_usd + usd, 6)
+        self.day_calls += 1
+
+
+@dataclass
+class RadarState:
+    posted: set[str] = field(default_factory=set)
+    scored_below: set[str] = field(default_factory=set)
+    usage: UsageLedger = field(default_factory=UsageLedger)
+
+    def handled(self, key: str) -> bool:
+        return key in self.posted or key in self.scored_below
+
+
+def _read_json(path: Path) -> object:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise StateError(f"state file {path.name} is unreadable or not JSON") from exc
 
-    if not isinstance(payload, dict) or payload.get("version") != STATE_VERSION:
+
+def _string_set(payload: dict[str, object], key: str, name: str) -> set[str]:
+    values = payload.get(key)
+    if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+        raise StateError(f"state file {name} must hold a list of string IDs under {key!r}")
+    return set(values)
+
+
+def load_seen(path: Path) -> tuple[set[str], set[str]]:
+    """Return (posted, scored_below). Missing means a first run; corrupt errors, never resets."""
+    if not path.exists():
+        return set(), set()
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
         raise StateError(f"state file {path.name} has an unsupported format")
-    ids = payload.get("ids")
-    if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
-        raise StateError(f"state file {path.name} must hold a list of string IDs")
-    return set(ids)
+    match payload.get("version"):
+        case 1:
+            return _string_set(payload, "ids", path.name), set()
+        case 2:
+            return (
+                _string_set(payload, "posted", path.name),
+                _string_set(payload, "scored_below", path.name),
+            )
+        case _:
+            raise StateError(f"state file {path.name} has an unsupported format")
 
 
-def save_ids(path: Path, ids: set[str]) -> None:
-    """Write atomically so a crash mid-write can't leave a truncated file behind."""
+def load_usage(path: Path) -> UsageLedger:
+    if not path.exists():
+        return UsageLedger()
+    try:
+        return UsageLedger.model_validate(_read_json(path))
+    except ValidationError as exc:
+        raise StateError(f"state file {path.name} has an unsupported format") from exc
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Write via a temp file so a crash mid-write can't leave a truncated file behind."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"version": STATE_VERSION, "ids": sorted(ids)}, indent=1) + "\n"
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(payload)
+            handle.write(text)
         os.replace(tmp_name, path)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
 
 
-class StateStore(Protocol):
-    def load(self) -> set[str]: ...
+def save_state(directory: Path, state: RadarState) -> None:
+    seen = {
+        "version": SEEN_VERSION,
+        "posted": sorted(state.posted),
+        "scored_below": sorted(state.scored_below),
+    }
+    _write_atomic(directory / SEEN_FILENAME, json.dumps(seen, indent=1) + "\n")
+    _write_atomic(directory / USAGE_FILENAME, state.usage.model_dump_json(indent=1) + "\n")
 
-    def persist(self, ids: set[str], message: str) -> None: ...
+
+class StateStore(Protocol):
+    def load(self) -> RadarState: ...
+
+    def persist(self, state: RadarState, message: str) -> None: ...
 
 
 class FileStateStore:
     def __init__(self, directory: Path) -> None:
-        self.path = directory / STATE_FILENAME
+        self.directory = directory
 
-    def load(self) -> set[str]:
-        return load_ids(self.path)
+    def load(self) -> RadarState:
+        posted, scored_below = load_seen(self.directory / SEEN_FILENAME)
+        usage = load_usage(self.directory / USAGE_FILENAME)
+        return RadarState(posted=posted, scored_below=scored_below, usage=usage)
 
-    def persist(self, ids: set[str], message: str) -> None:
-        save_ids(self.path, ids)
+    def persist(self, state: RadarState, message: str) -> None:
+        save_state(self.directory, state)
 
 
 class GitStateStore(FileStateStore):
@@ -74,13 +148,9 @@ class GitStateStore(FileStateStore):
     durable on GitHub before anything reaches Discord.
     """
 
-    def __init__(self, directory: Path) -> None:
-        super().__init__(directory)
-        self.directory = directory
-
-    def persist(self, ids: set[str], message: str) -> None:
-        save_ids(self.path, ids)
-        self._git("add", STATE_FILENAME)
+    def persist(self, state: RadarState, message: str) -> None:
+        save_state(self.directory, state)
+        self._git("add", SEEN_FILENAME, USAGE_FILENAME)
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
             return
         self._git("-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}",
