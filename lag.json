@@ -43,7 +43,11 @@
   "greenhouse/andurilindustries": "2026-11-03T01:31:55.546979+00:00",
   "greenhouse/gusto": "2026-11-03T01:31:55.546979+00:00"
  },
- "radar_minutes": {},
+ "radar_minutes": {
+  "simplify": [
+   59.4
+  ]
+ },
  "simplify_delay_minutes": [
   161.4,
   1592.4,
