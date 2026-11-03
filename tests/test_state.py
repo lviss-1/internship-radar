@@ -15,6 +15,7 @@ import respx
 from radar.ats import Board
 from radar.config import Settings
 from radar.discord import DiscordError
+from radar.feedback import FeedbackConfig
 from radar.main import AiConfig, Hooks, RunSummary, collect_alerts, record_radar_lag, run
 from radar.net import make_client
 from radar.sources.boards import WatchlistBoard
@@ -120,9 +121,15 @@ def run_once(
     errors: RecordingHook | None = None,
     claude: FakeClaude | None = None,
     boards: list[WatchlistBoard] | None = None,
+    feedback: FeedbackConfig | None = None,
 ) -> RunSummary:
     claude = claude or FakeClaude(fake_model)
-    hooks = Hooks(matches=matches, errors=errors or RecordingHook(), ping_user_id="42")  # type: ignore[arg-type]
+    hooks = Hooks(
+        matches=matches,  # type: ignore[arg-type]
+        errors=errors or RecordingHook(),  # type: ignore[arg-type]
+        ping_user_id="42",
+        feedback=feedback,
+    )
     with make_client() as client:
         return run(
             settings, client, store, hooks, AiConfig(claude.client, RESUMES), NOW, boards=boards
@@ -556,3 +563,20 @@ def test_backfill_covers_both_buckets_and_reports_count() -> None:
     assert added == 2
     assert state.posted == {"simplify:a", "greenhouse:1"}
     assert state.scored_below == {"simplify:b", "ashby:x"}
+
+
+def test_feedback_failure_alerts_once_and_scoring_continues(
+    settings: Settings, tmp_path: Path, raw_listings: list[dict[str, Any]]
+) -> None:
+    config = FeedbackConfig(bot_token="t", webhook_url="https://discord.com/api/webhooks/9/x")
+    errors = RecordingHook()
+
+    with sources(raw_listings):
+        summary = run_once(settings, FileStateStore(tmp_path), RecordingHook(), errors=errors,
+                           feedback=config)  # fmt: skip
+
+    assert summary.scored == 6 and summary.posted == 6
+    assert summary.feedback_error == "matches webhook: HTTP 404"
+    assert (
+        "Reaction feedback is off this run (matches webhook: HTTP 404)" in errors.sent[0]["content"]
+    )

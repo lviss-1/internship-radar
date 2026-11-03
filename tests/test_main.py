@@ -12,6 +12,7 @@ import yaml
 
 from radar.config import Settings
 from radar.main import (
+    BOT_ENV,
     ERRORS_ENV,
     HEALTHCHECK_ENV,
     MATCHES_ENV,
@@ -247,6 +248,7 @@ def test_workflow_passes_every_secret_the_code_reads() -> None:
         step["env"] for step in workflow["jobs"]["run"]["steps"] if step.get("id") == "radar"
     )
     required = {
+        BOT_ENV,
         MATCHES_ENV,
         ERRORS_ENV,
         PING_USER_ENV,

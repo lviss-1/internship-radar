@@ -47,6 +47,7 @@ jobs:
           DISCORD_WEBHOOK_MATCHES: ${{ secrets.DISCORD_WEBHOOK_MATCHES }}
           DISCORD_WEBHOOK_ERRORS: ${{ secrets.DISCORD_WEBHOOK_ERRORS }}
           DISCORD_PING_USER_ID: ${{ secrets.DISCORD_PING_USER_ID }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RESUME_SWE_TEXT: ${{ secrets.RESUME_SWE_TEXT }}
           RESUME_PM_TEXT: ${{ secrets.RESUME_PM_TEXT }}

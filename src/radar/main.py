@@ -24,6 +24,7 @@ from radar.discord import (
     text_payload,
 )
 from radar.drafts import Drafter
+from radar.feedback import Feedback, FeedbackConfig, FeedbackError, read_feedback
 from radar.filters import LocationKind, Match, PostingFilter, RejectReason
 from radar.net import NetworkError, make_client, request_with_retries
 from radar.normalize import Posting, Source
@@ -60,6 +61,7 @@ MATCHES_ENV = "DISCORD_WEBHOOK_MATCHES"
 ERRORS_ENV = "DISCORD_WEBHOOK_ERRORS"
 PING_USER_ENV = "DISCORD_PING_USER_ID"
 HEALTHCHECK_ENV = "HEALTHCHECK_PING_URL"
+BOT_ENV = "DISCORD_BOT_TOKEN"
 CONSECUTIVE_FAILURE_LIMIT = 3
 DEFAULT_ALERT_COOLDOWN = timedelta(hours=6)
 BOARD_FAILURE_ALERT_RATIO = 0.25
@@ -98,6 +100,9 @@ class RunSummary:
     board_failures: dict[str, str] = field(default_factory=dict)
     boards_down: dict[str, int] = field(default_factory=dict)
     watchlist_age_days: float | None = None
+    feedback_liked: int = 0
+    feedback_disliked: int = 0
+    feedback_error: str | None = None
     lag_text: str = ""
     rejected: Counter[RejectReason] = field(default_factory=Counter)
     unscored: Counter[str] = field(default_factory=Counter)
@@ -117,7 +122,8 @@ class RunSummary:
             f"dropped_edits={self.dropped_edits} posted={self.posted} failed={self.failed} "
             f"state_size={self.state_size} month_usd={self.month_usd:.4f} "
             f"unscored[{counts(self.unscored)}] draft_failures[{counts(self.draft_failures)}] "
-            f"rejected[{counts(self.rejected)}] lag[{self.lag_text}]"
+            f"rejected[{counts(self.rejected)}] lag[{self.lag_text}] "
+            f"feedback liked={self.feedback_liked} disliked={self.feedback_disliked}"
         )
 
     @property
@@ -136,6 +142,7 @@ class Hooks:
     matches: DiscordWebhook
     errors: DiscordWebhook
     ping_user_id: str | None
+    feedback: FeedbackConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -148,13 +155,18 @@ class Evaluator:
     """Fetches the description, scores the posting and drafts for high scores."""
 
     def __init__(
-        self, settings: Settings, http: httpx.Client, ai: AiConfig, budget: Budget
+        self,
+        settings: Settings,
+        http: httpx.Client,
+        ai: AiConfig,
+        budget: Budget,
+        feedback: Feedback | None = None,
     ) -> None:
         self._settings = settings
         self._resumes = ai.resumes
         self._fetcher = DescriptionFetcher(http, settings.scoring.max_description_chars)
         self._scorer = Scorer(
-            ai.client, settings.models.cheap, settings.scoring, ai.resumes, budget
+            ai.client, settings.models.cheap, settings.scoring, ai.resumes, budget, feedback
         )
         self._drafter = Drafter(ai.client, settings.models.strong, settings.scoring, budget)
 
@@ -213,6 +225,30 @@ def webhook_from_env(client: httpx.Client, env_name: str) -> DiscordWebhook:
     if not url:
         raise ConfigError(f"environment variable {env_name} is not set")
     return DiscordWebhook(client, url, label=env_name)
+
+
+def feedback_config_from_env() -> FeedbackConfig | None:
+    token = os.environ.get(BOT_ENV, "").strip()
+    if not token:
+        log.warning("%s is not set; scoring runs without reaction feedback", BOT_ENV)
+        return None
+    return FeedbackConfig(bot_token=token, webhook_url=os.environ[MATCHES_ENV].strip())
+
+
+def load_feedback(
+    client: httpx.Client, config: FeedbackConfig | None, now: datetime, summary: RunSummary
+) -> Feedback | None:
+    """Read reactions for this run's scorer. A failure only costs the calibration examples."""
+    if config is None:
+        return None
+    try:
+        feedback = read_feedback(client, config, now)
+    except FeedbackError as exc:
+        summary.feedback_error = str(exc)
+        log.warning("feedback unavailable: %s", exc)
+        return None
+    summary.feedback_liked, summary.feedback_disliked = len(feedback.liked), len(feedback.disliked)
+    return feedback
 
 
 def ping_user_from_env() -> str | None:
@@ -420,7 +456,8 @@ def run(
         settings.pricing,
         settings.scoring.worst_case_input_tokens,
     )
-    evaluator = Evaluator(settings, client, ai, budget)
+    feedback = load_feedback(client, hooks.feedback, now, summary) if batch else None
+    evaluator = Evaluator(settings, client, ai, budget, feedback)
     to_post: list[tuple[Evaluation, Decision]] = []
     for match in batch:
         record_radar_lag(match.posting, state.lag, now)
@@ -542,6 +579,10 @@ def collect_alerts(summary: RunSummary, state: RadarState, settings: Settings) -
             f"board_down:{board_key}",
             f"Board {board_key} has failed {count} runs in a row ({why}). The company may "
             "have changed job systems; re-run scripts/probe_boards.py.",
+        )
+    if summary.feedback_error:
+        event(
+            "feedback_unavailable", f"Reaction feedback is off this run ({summary.feedback_error})."
         )
     if summary.failed:
         event("post_failed", f"{summary.failed} postings failed to send; they retry next run.")
@@ -714,6 +755,7 @@ def execute(
                 matches=webhook_from_env(client, MATCHES_ENV),
                 errors=errors_hook,
                 ping_user_id=ping_user_from_env(),
+                feedback=feedback_config_from_env(),
             )
             ai = AiConfig(make_anthropic_client(settings.scoring), Resumes.from_env())
 
