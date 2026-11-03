@@ -1,9 +1,9 @@
 {
  "version": 1,
  "month": "2026-11",
- "month_usd": 0.087845,
+ "month_usd": 0.088982,
  "day": "2026-11-03",
- "day_calls": 4,
+ "day_calls": 5,
  "budget_alert_day": "",
  "heartbeat_day": "2026-11-03",
  "alerts_sent": {}
