@@ -232,7 +232,31 @@ def feedback_config_from_env() -> FeedbackConfig | None:
     if not token:
         log.warning("%s is not set; scoring runs without reaction feedback", BOT_ENV)
         return None
-    return FeedbackConfig(bot_token=token, webhook_url=os.environ[MATCHES_ENV].strip())
+    webhook_url = os.environ.get(MATCHES_ENV, "").strip()
+    if not webhook_url:
+        log.warning("%s is not set; reaction feedback needs it to find the channel", MATCHES_ENV)
+        return None
+    return FeedbackConfig(bot_token=token, webhook_url=webhook_url)
+
+
+def check_feedback(client: httpx.Client, now: datetime) -> int:
+    """Read reactions once and log only counts, to confirm the bot setup works."""
+    config = feedback_config_from_env()
+    if config is None:
+        return 1
+    try:
+        feedback = read_feedback(client, config, now)
+    except FeedbackError as exc:
+        log.error("feedback check failed: %s", exc)
+        return 1
+    log.info(
+        "feedback check ok: messages=%d with_embeds=%d liked=%d disliked=%d",
+        feedback.messages_seen,
+        feedback.with_embeds,
+        len(feedback.liked),
+        len(feedback.disliked),
+    )
+    return 0
 
 
 def load_feedback(
@@ -715,6 +739,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--heartbeat", action="store_true", help="post the heartbeat even if one was sent today"
     )
+    parser.add_argument(
+        "--check-feedback",
+        action="store_true",
+        help="read reactions with the Discord bot, log counts only, and exit",
+    )
     return parser.parse_args(argv)
 
 
@@ -733,6 +762,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     with make_client() as client:
+        if args.check_feedback:
+            return check_feedback(client, now)
         code = execute(args, client, store, now)
         if not args.dry_run:
             ping_healthcheck(client, succeeded=code == 0)

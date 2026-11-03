@@ -13,6 +13,10 @@ on:
         description: Force a heartbeat (one is also sent on the first run after 08:00 ET)
         type: boolean
         default: false
+      check_feedback:
+        description: Only check that the Discord bot can read reactions (logs counts, posts nothing)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -53,9 +57,11 @@ jobs:
           RESUME_PM_TEXT: ${{ secrets.RESUME_PM_TEXT }}
           HEALTHCHECK_PING_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
           HEARTBEAT: ${{ inputs.heartbeat == true }}
+          CHECK_FEEDBACK: ${{ inputs.check_feedback == true }}
         run: |
           args=(--state-dir .state --push-state)
           if [ "$HEARTBEAT" = "true" ]; then args+=(--heartbeat); fi
+          if [ "$CHECK_FEEDBACK" = "true" ]; then args+=(--check-feedback); fi
           uv run --no-sync radar "${args[@]}"
 
       # The radar step reports its own failures; this covers steps before it.

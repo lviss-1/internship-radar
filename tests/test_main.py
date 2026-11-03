@@ -259,3 +259,34 @@ def test_workflow_passes_every_secret_the_code_reads() -> None:
 
     for name in sorted(required):
         assert env.get(name) == f"${{{{ secrets.{name} }}}}", name
+
+
+def test_check_feedback_logs_counts_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("DISCORD_WEBHOOK_MATCHES", MATCHES_URL)
+    message = {
+        "id": "1",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "embeds": [{"title": "Secret Co — Intern", "fields": []}],
+        "reactions": [{"emoji": {"name": "\N{THUMBS UP SIGN}"}, "count": 1}],
+    }
+    with respx.mock() as mock, caplog.at_level(logging.INFO):
+        mock.get(MATCHES_URL).mock(return_value=httpx.Response(200, json={"channel_id": "7"}))
+        mock.get("https://discord.com/api/v10/channels/7/messages").mock(
+            return_value=httpx.Response(200, json=[message])
+        )
+        code = main(["--check-feedback"])
+
+    assert code == 0
+    assert "feedback check ok: messages=1 with_embeds=1 liked=1 disliked=0" in caplog.text
+    assert "Secret Co" not in caplog.text
+
+
+def test_check_feedback_without_token_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+
+    assert main(["--check-feedback"]) == 1
