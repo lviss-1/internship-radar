@@ -26,6 +26,7 @@ class SourcesSettings(StrictModel):
 class DeliverySettings(StrictModel):
     max_post_age_hours: int = Field(gt=0)
     max_posts_per_run: int = Field(gt=0)
+    heartbeat_hour: int = Field(ge=0, le=23)
 
 
 class Thresholds(StrictModel):

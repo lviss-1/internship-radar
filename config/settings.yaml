@@ -6,6 +6,7 @@ sources:
 delivery:
   max_post_age_hours: 72
   max_posts_per_run: 25
+  heartbeat_hour: 8
 
 thresholds:
   post: 60

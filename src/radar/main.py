@@ -23,7 +23,7 @@ from radar.discord import (
 )
 from radar.drafts import Drafter
 from radar.filters import LocationKind, Match, PostingFilter, RejectReason
-from radar.net import NetworkError, make_client
+from radar.net import NetworkError, make_client, request_with_retries
 from radar.scoring import (
     Budget,
     BudgetExhausted,
@@ -41,6 +41,7 @@ log = logging.getLogger("radar")
 MATCHES_ENV = "DISCORD_WEBHOOK_MATCHES"
 ERRORS_ENV = "DISCORD_WEBHOOK_ERRORS"
 PING_USER_ENV = "DISCORD_PING_USER_ID"
+HEALTHCHECK_ENV = "HEALTHCHECK_PING_URL"
 CONSECUTIVE_FAILURE_LIMIT = 3
 KNOWN_ERRORS = (ConfigError, SimplifyFeedError, StateError, DiscordError, NetworkError)
 
@@ -62,6 +63,7 @@ class RunSummary:
     state_size: int = 0
     month_usd: float = 0.0
     budget_note: str | None = None
+    heartbeat_due: bool = False
     rejected: Counter[RejectReason] = field(default_factory=Counter)
     unscored: Counter[str] = field(default_factory=Counter)
     draft_failures: Counter[str] = field(default_factory=Counter)
@@ -222,6 +224,7 @@ def run(
     hooks: Hooks | None,
     ai: AiConfig | None,
     now: datetime,
+    force_heartbeat: bool = False,
 ) -> RunSummary:
     summary = RunSummary()
     simplify = settings.sources.simplify
@@ -278,6 +281,9 @@ def run(
     alert_budget = bool(summary.budget_note) and state.usage.budget_alert_day != state.usage.day
     if alert_budget:
         state.usage.budget_alert_day = state.usage.day
+    summary.heartbeat_due = force_heartbeat or heartbeat_is_due(state, now, settings)
+    if summary.heartbeat_due:
+        state.usage.heartbeat_day = state.usage.day
 
     if batch:
         state.posted |= {evaluation.match.posting.key for evaluation, _ in to_post}
@@ -286,6 +292,8 @@ def run(
             f"reserve {len(to_post)} postings, {summary.below_threshold} below threshold",
         )
         post_evaluations(to_post, state, store, hooks, summary)
+    elif summary.heartbeat_due:
+        store.persist(state, "record heartbeat")
 
     summary.state_size = len(state.posted)
     summary.month_usd = state.usage.month_usd
@@ -301,6 +309,34 @@ def run(
 
 def local_date(now: datetime, settings: Settings) -> date:
     return now.astimezone(ZoneInfo(settings.quiet_hours.timezone)).date()
+
+
+def heartbeat_is_due(state: RadarState, now: datetime, settings: Settings) -> bool:
+    """Once a day, on the first run after the configured hour, whatever triggered the run."""
+    local = now.astimezone(ZoneInfo(settings.quiet_hours.timezone))
+    return (
+        local.hour >= settings.delivery.heartbeat_hour
+        and state.usage.heartbeat_day != local.date().isoformat()
+    )
+
+
+def ping_healthcheck(client: httpx.Client, succeeded: bool) -> None:
+    """Tell the external dead-man's switch how this run went. Never fails the run."""
+    url = os.environ.get(HEALTHCHECK_ENV, "").strip()
+    if not url:
+        log.warning("%s is not set; skipping the healthcheck ping", HEALTHCHECK_ENV)
+        return
+    if not url.startswith("https://"):
+        log.warning("%s is not an https URL; skipping the healthcheck ping", HEALTHCHECK_ENV)
+        return
+    target = url if succeeded else f"{url.rstrip('/')}/fail"
+    try:
+        response = request_with_retries(client, "POST", target, label="healthcheck", attempts=2)
+    except NetworkError as exc:
+        log.warning("healthcheck ping failed: %s", exc)
+        return
+    if response.status_code >= 400:
+        log.warning("healthcheck ping returned HTTP %d", response.status_code)
 
 
 def problems_text(summary: RunSummary) -> str | None:
@@ -353,7 +389,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="fetch and filter only; never call Claude, post or write state",
     )
-    parser.add_argument("--heartbeat", action="store_true", help="also post a daily heartbeat")
+    parser.add_argument(
+        "--heartbeat", action="store_true", help="post the heartbeat even if one was sent today"
+    )
     return parser.parse_args(argv)
 
 
@@ -372,37 +410,49 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     with make_client() as client:
-        errors_hook: DiscordWebhook | None = None
-        ai: AiConfig | None = None
-        try:
-            settings = load_settings(args.settings)
-            hooks: Hooks | None = None
-            if not args.dry_run:
-                errors_hook = webhook_from_env(client, ERRORS_ENV)
-                hooks = Hooks(
-                    matches=webhook_from_env(client, MATCHES_ENV),
-                    errors=errors_hook,
-                    ping_user_id=ping_user_from_env(),
-                )
-                ai = AiConfig(make_anthropic_client(settings.scoring), Resumes.from_env())
+        code = execute(args, client, store, now)
+        if not args.dry_run:
+            ping_healthcheck(client, succeeded=code == 0)
+        return code
 
-            summary = run(settings, client, store, hooks, ai, now)
-            log.info("run complete: %s", summary.describe())
 
-            problems = problems_text(summary)
-            if problems:
-                report_error(errors_hook, problems)
-            if args.heartbeat and errors_hook is not None:
+def execute(
+    args: argparse.Namespace, client: httpx.Client, store: StateStore, now: datetime
+) -> int:
+    errors_hook: DiscordWebhook | None = None
+    ai: AiConfig | None = None
+    try:
+        settings = load_settings(args.settings)
+        hooks: Hooks | None = None
+        if not args.dry_run:
+            errors_hook = webhook_from_env(client, ERRORS_ENV)
+            hooks = Hooks(
+                matches=webhook_from_env(client, MATCHES_ENV),
+                errors=errors_hook,
+                ping_user_id=ping_user_from_env(),
+            )
+            ai = AiConfig(make_anthropic_client(settings.scoring), Resumes.from_env())
+
+        summary = run(settings, client, store, hooks, ai, now, force_heartbeat=args.heartbeat)
+        log.info("run complete: %s", summary.describe())
+
+        problems = problems_text(summary)
+        if problems:
+            report_error(errors_hook, problems)
+        if summary.heartbeat_due and errors_hook is not None:
+            try:
                 errors_hook.send(text_payload(heartbeat_text(summary, now, settings)))
-            return 1 if summary.failed else 0
-        except Exception as exc:
-            message = describe_exception(exc)
-            log.error("run failed: %s", message)
-            report_error(errors_hook, message)
-            return 1
-        finally:
-            if ai is not None:
-                ai.client.close()
+            except DiscordError as exc:
+                log.warning("heartbeat failed: %s", exc)
+        return 1 if summary.failed else 0
+    except Exception as exc:
+        message = describe_exception(exc)
+        log.error("run failed: %s", message)
+        report_error(errors_hook, message)
+        return 1
+    finally:
+        if ai is not None:
+            ai.client.close()
 
 
 if __name__ == "__main__":

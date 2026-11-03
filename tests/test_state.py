@@ -349,3 +349,15 @@ def test_git_store_push_failure_is_a_state_error(tmp_path: Path) -> None:
 
     with pytest.raises(StateError, match="git push failed"):
         GitStateStore(checkout).persist(RadarState({"simplify:a"}), "reserve 1")
+
+
+def test_heartbeat_is_due_on_first_run_of_the_day_only(
+    settings: Settings, tmp_path: Path, feed: Any
+) -> None:
+    store = FileStateStore(tmp_path)
+
+    first = run_once(settings, store, RecordingHook())
+    second = run_once(settings, store, RecordingHook())
+
+    assert (first.heartbeat_due, second.heartbeat_due) == (True, False)
+    assert store.load().usage.heartbeat_day == "2026-11-02"

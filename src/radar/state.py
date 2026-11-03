@@ -33,6 +33,7 @@ class UsageLedger(BaseModel):
     day: str = ""
     day_calls: int = Field(default=0, ge=0)
     budget_alert_day: str = ""
+    heartbeat_day: str = ""
 
     def roll(self, today: date) -> None:
         """Reset counters when the month or day changed since the last run."""

@@ -1,16 +1,16 @@
 name: radar
 
 on:
+  # Off the top of the hour (GitHub's busiest time) and a few minutes after
+  # Simplify's own :01/:31 feed commits. GitHub may delay or drop scheduled
+  # runs, so an external cron also calls workflow_dispatch at :20/:50; overlap
+  # is safe because runs queue in the concurrency group and state dedupes.
   schedule:
-    # Off the top of the hour (GitHub's busiest time) and a few minutes after
-    # Simplify's own :01/:31 feed commits.
-    - cron: "7,37 * * * *"
-    # Daily heartbeat, 13:17 UTC = 08:17 EST / 09:17 EDT.
-    - cron: "17 13 * * *"
+    - cron: "8,38 * * * *"
   workflow_dispatch:
     inputs:
       heartbeat:
-        description: Also post the heartbeat
+        description: Force a heartbeat (one is also sent on the first run after 08:00 ET)
         type: boolean
         default: false
 
@@ -50,7 +50,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RESUME_SWE_TEXT: ${{ secrets.RESUME_SWE_TEXT }}
           RESUME_PM_TEXT: ${{ secrets.RESUME_PM_TEXT }}
-          HEARTBEAT: ${{ github.event.schedule == '17 13 * * *' || inputs.heartbeat == true }}
+          HEALTHCHECK_PING_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+          HEARTBEAT: ${{ inputs.heartbeat == true }}
         run: |
           args=(--state-dir .state --push-state)
           if [ "$HEARTBEAT" = "true" ]; then args+=(--heartbeat); fi
