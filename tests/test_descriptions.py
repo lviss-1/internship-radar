@@ -8,6 +8,8 @@ from radar.net import make_client
 from radar.sources.descriptions import DescriptionFetcher, html_to_text, is_safe_url
 
 LONG_TEXT = "Responsibilities include building services. " * 20
+FIRST_JOB = "11111111-2222-4333-8444-555555555555"
+SECOND_JOB = "66666666-7777-4888-8999-aaaaaaaaaaaa"
 
 
 def fetcher(client: httpx.Client, max_chars: int = 15000) -> DescriptionFetcher:
@@ -71,7 +73,7 @@ def test_greenhouse_embed_urls_are_understood() -> None:
 
 @respx.mock
 def test_lever_combines_sections() -> None:
-    respx.get("https://api.lever.co/v0/postings/acme/abc-123").mock(
+    respx.get("https://api.lever.co/v0/postings/acme/0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -84,7 +86,9 @@ def test_lever_combines_sections() -> None:
     )
 
     with make_client() as client:
-        result = fetcher(client).fetch("https://jobs.lever.co/acme/abc-123/apply")
+        result = fetcher(client).fetch(
+            "https://jobs.lever.co/acme/0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8/apply"
+        )
 
     assert result.text == "Intro\n\nAbout the role\n\nYou will\n\n- Build\n- Test\n\nBenefits"
 
@@ -94,17 +98,21 @@ def test_ashby_board_is_fetched_once_per_run() -> None:
     route = respx.get("https://api.ashbyhq.com/posting-api/job-board/acme").mock(
         return_value=httpx.Response(
             200,
-            json={"jobs": [
-                {"id": "j1", "descriptionPlain": "First role"},
-                {"id": "j2", "descriptionHtml": "<p>Second role</p>"},
-            ]},
+            json={
+                "jobs": [
+                    {"id": FIRST_JOB, "descriptionPlain": "First role"},
+                    {"id": SECOND_JOB, "descriptionHtml": "<p>Second role</p>"},
+                ]
+            },
         )
-    )  # fmt: skip
+    )
 
     with make_client() as client:
         shared = fetcher(client)
-        first = shared.fetch("https://jobs.ashbyhq.com/acme/j1/application?embed=true")
-        second = shared.fetch("https://jobs.ashbyhq.com/acme/j2")
+        first = shared.fetch(
+            "https://jobs.ashbyhq.com/acme/11111111-2222-4333-8444-555555555555/application?embed=true"
+        )
+        second = shared.fetch(f"https://jobs.ashbyhq.com/acme/{SECOND_JOB}")
 
     assert (first.text, second.text) == ("First role", "Second role")
     assert route.call_count == 1
@@ -209,9 +217,13 @@ def test_unexpected_payload_shapes_fall_back_instead_of_crashing() -> None:
     respx.get("https://api.ashbyhq.com/posting-api/job-board/acme").mock(
         return_value=httpx.Response(200, json=["not", "an", "object"])
     )
-    respx.get("https://jobs.ashbyhq.com/acme/j1").mock(return_value=httpx.Response(404))
+    respx.get("https://jobs.ashbyhq.com/acme/bbbbbbbb-cccc-4ddd-8eee-ffffffffffff").mock(
+        return_value=httpx.Response(404)
+    )
 
     with make_client() as client:
-        result = fetcher(client).fetch("https://jobs.ashbyhq.com/acme/j1")
+        result = fetcher(client).fetch(
+            "https://jobs.ashbyhq.com/acme/bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+        )
 
     assert result.via == "not_found"

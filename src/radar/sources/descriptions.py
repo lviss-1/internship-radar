@@ -6,12 +6,14 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from radar.ats import Board, parse_ats_url
 from radar.net import NetworkError, request_with_retries
 
 MIN_PAGE_TEXT_CHARS = 400
@@ -70,6 +72,21 @@ def html_to_text(markup: str) -> str:
     return extractor.text()
 
 
+def truncate_description(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n[description truncated]"
+
+
+def lever_text(posting: dict[str, Any]) -> str:
+    sections = [posting.get("openingPlain"), posting.get("descriptionPlain")]
+    for item in posting.get("lists") or []:
+        sections.append(item.get("text"))
+        sections.append(html_to_text(item.get("content") or ""))
+    sections.append(posting.get("additionalPlain"))
+    return "\n\n".join(section.strip() for section in sections if section and section.strip())
+
+
 def is_safe_url(url: str) -> bool:
     """Only public https hosts. Feed URLs are third-party input, so a link (or a redirect)
     must not be able to point the runner at localhost, cloud metadata or private networks."""
@@ -105,20 +122,7 @@ class DescriptionFetcher:
     def fetch(self, url: str) -> Description:
         if not is_safe_url(url):
             return Description(None, "unsafe_url")
-        parts = urlsplit(url)
-        host = (parts.hostname or "").lower()
-        segments = [segment for segment in parts.path.split("/") if segment]
-
-        structured: tuple[str, Callable[[], str | None]] | None = None
-        if host.endswith("greenhouse.io"):
-            structured = ("greenhouse", lambda: self._greenhouse(segments, parts.query))
-        elif host == "jobs.lever.co" and len(segments) >= 2:
-            structured = ("lever", lambda: self._lever(segments[0], segments[1]))
-        elif host == "jobs.ashbyhq.com" and len(segments) >= 2:
-            structured = ("ashby", lambda: self._ashby(segments[0], segments[1]))
-        elif host.endswith(".myworkdayjobs.com"):
-            structured = ("workday", lambda: self._workday(host, segments))
-
+        structured = self._structured_source(url)
         if structured is not None:
             via, fetch = structured
             text = self._guarded(fetch)
@@ -129,10 +133,21 @@ class DescriptionFetcher:
             return self._finish(text, "page")
         return Description(None, "not_found")
 
+    def _structured_source(self, url: str) -> tuple[str, Callable[[], str | None]] | None:
+        ref = parse_ats_url(url)
+        if ref is not None and ref.slug and ref.job_id:
+            fetchers = {Board.GREENHOUSE: self._greenhouse, Board.LEVER: self._lever,
+                        Board.ASHBY: self._ashby}  # fmt: skip
+            return str(ref.board), partial(fetchers[ref.board], ref.slug, ref.job_id)
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host.endswith(".myworkdayjobs.com"):
+            segments = [segment for segment in parts.path.split("/") if segment]
+            return "workday", partial(self._workday, host, segments)
+        return None
+
     def _finish(self, text: str, via: str) -> Description:
-        if len(text) > self._max_chars:
-            text = text[: self._max_chars] + "\n[description truncated]"
-        return Description(text, via)
+        return Description(truncate_description(text, self._max_chars), via)
 
     @staticmethod
     def _guarded(fetch: Callable[[], str | None]) -> str | None:
@@ -157,16 +172,7 @@ class DescriptionFetcher:
             return None
         return response.json()
 
-    def _greenhouse(self, segments: list[str], query: str) -> str | None:
-        if segments and segments[0] == "embed":
-            params = parse_qs(query)
-            board, job = params.get("for", [""])[0], params.get("token", [""])[0]
-        elif len(segments) >= 3 and segments[1] == "jobs":
-            board, job = segments[0], segments[2]
-        else:
-            return None
-        if not (board and job.isdigit()):
-            return None
+    def _greenhouse(self, board: str, job: str) -> str | None:
         url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job}"
         payload = self._get_json(url, "greenhouse job")
         content = (payload or {}).get("content")
@@ -181,14 +187,7 @@ class DescriptionFetcher:
             payload = self._get_json(url, "lever job")
         finally:
             self._last_lever_request = time.monotonic()
-        if not payload:
-            return None
-        sections = [payload.get("openingPlain"), payload.get("descriptionPlain")]
-        for item in payload.get("lists") or []:
-            sections.append(item.get("text"))
-            sections.append(html_to_text(item.get("content") or ""))
-        sections.append(payload.get("additionalPlain"))
-        return "\n\n".join(section.strip() for section in sections if section and section.strip())
+        return lever_text(payload) if payload else None
 
     def _ashby(self, org: str, job_id: str) -> str | None:
         if org not in self._ashby_boards:

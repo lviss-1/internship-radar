@@ -4,7 +4,15 @@ from typing import Any
 import pytest
 
 from radar.config import Settings
-from radar.filters import LocationClassifier, LocationKind, Match, PostingFilter, RejectReason, Tag
+from radar.filters import (
+    LocationClassifier,
+    LocationKind,
+    Match,
+    PostingFilter,
+    RejectReason,
+    Tag,
+    split_locations,
+)
 from radar.sources.simplify import parse_listings
 from tests.conftest import NOW, make_posting
 
@@ -246,3 +254,59 @@ def test_apply_counts_reject_reasons(posting_filter: PostingFilter) -> None:
 
     assert [m.posting.source_id for m in result.matches] == ["1"]
     assert result.rejected == {RejectReason.INACTIVE: 1, RejectReason.LOCATION: 2}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Hybrid - New York, NY", LocationKind.IN_PERSON),
+        ("Hybrid - San Francisco, CA", LocationKind.OTHER_US),
+        ("San Francisco, CA • New York, NY", LocationKind.IN_PERSON),
+        (
+            "San Francisco, CA, US; Palo Alto, CA, US; Seattle, WA, US; New York, NY, US",
+            LocationKind.IN_PERSON,
+        ),
+        (
+            "San Francisco, CA;  Sunnyvale, CA ; New York City, NY; Seattle, WA",
+            LocationKind.IN_PERSON,
+        ),
+        ("Costa Mesa, California, United States", LocationKind.OTHER_US),
+        ("New York, New York", LocationKind.IN_PERSON),
+        ("New York, NY (HQ)", LocationKind.IN_PERSON),
+        ("New York", LocationKind.IN_PERSON),
+        ("New York, Seattle, South San Francisco HQ", LocationKind.IN_PERSON),
+        ("San Francisco, New York City, Seattle", LocationKind.IN_PERSON),
+        ("Seattle", LocationKind.OTHER_US),
+        ("Oakland, CA", LocationKind.OTHER_US),
+        ("Remote - US", LocationKind.REMOTE_US),
+        ("Toronto, ON, CA", LocationKind.NOT_US),
+        ("Toronto, Canada", LocationKind.NOT_US),
+        ("Toronto", LocationKind.NOT_US),
+        ("Cambridge, UK", LocationKind.NOT_US),
+        ("Dublin", LocationKind.NOT_US),
+        ("Dublin, IE", LocationKind.NOT_US),
+        ("Zurich, CH", LocationKind.NOT_US),
+        ("Paris, France", LocationKind.NOT_US),
+        ("In-Office", LocationKind.NOT_US),
+        ("Hybrid", LocationKind.NOT_US),
+    ],
+)
+def test_board_location_formats(
+    classifier: LocationClassifier, raw: str, expected: LocationKind
+) -> None:
+    assert classifier.best([raw]) is expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "places"),
+    [
+        ("Hybrid - New York, NY", ["New York, NY"]),
+        ("A, CA • B, NY", ["A, CA", "B, NY"]),
+        ("New York, NY (HQ)", ["New York, NY"]),
+        ("Remote (US)", ["Remote (US)"]),
+        ("In-Office", []),
+        ("  ;  ", []),
+    ],
+)
+def test_split_locations(raw: str, places: list[str]) -> None:
+    assert split_locations(raw) == places

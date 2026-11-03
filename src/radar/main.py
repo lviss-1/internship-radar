@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import statistics
 import sys
 import traceback
 from collections import Counter
@@ -24,6 +25,7 @@ from radar.discord import (
 from radar.drafts import Drafter
 from radar.filters import LocationKind, Match, PostingFilter, RejectReason
 from radar.net import NetworkError, make_client, request_with_retries
+from radar.normalize import Posting, Source
 from radar.scoring import (
     Budget,
     BudgetExhausted,
@@ -32,9 +34,23 @@ from radar.scoring import (
     Scorer,
     make_anthropic_client,
 )
-from radar.sources.descriptions import DescriptionFetcher
+from radar.sources.boards import (
+    BoardResult,
+    BoardSource,
+    WatchlistBoard,
+    WatchlistError,
+    load_watchlist,
+)
+from radar.sources.descriptions import Description, DescriptionFetcher
 from radar.sources.simplify import SimplifyFeedError, load_postings
-from radar.state import FileStateStore, GitStateStore, RadarState, StateError, StateStore
+from radar.state import (
+    FileStateStore,
+    GitStateStore,
+    LagStats,
+    RadarState,
+    StateError,
+    StateStore,
+)
 
 log = logging.getLogger("radar")
 
@@ -43,7 +59,15 @@ ERRORS_ENV = "DISCORD_WEBHOOK_ERRORS"
 PING_USER_ENV = "DISCORD_PING_USER_ID"
 HEALTHCHECK_ENV = "HEALTHCHECK_PING_URL"
 CONSECUTIVE_FAILURE_LIMIT = 3
-KNOWN_ERRORS = (ConfigError, SimplifyFeedError, StateError, DiscordError, NetworkError)
+BOARD_FAILURE_ALERT_RATIO = 0.25
+KNOWN_ERRORS = (
+    ConfigError,
+    SimplifyFeedError,
+    StateError,
+    DiscordError,
+    NetworkError,
+    WatchlistError,
+)
 
 
 @dataclass
@@ -64,6 +88,12 @@ class RunSummary:
     month_usd: float = 0.0
     budget_note: str | None = None
     heartbeat_due: bool = False
+    simplify_failure: str | None = None
+    boards_total: int = 0
+    boards_polled: int = 0
+    board_postings: int = 0
+    board_failures: dict[str, str] = field(default_factory=dict)
+    lag_text: str = ""
     rejected: Counter[RejectReason] = field(default_factory=Counter)
     unscored: Counter[str] = field(default_factory=Counter)
     draft_failures: Counter[str] = field(default_factory=Counter)
@@ -73,15 +103,27 @@ class RunSummary:
             return ", ".join(f"{key}={value}" for key, value in sorted(counter.items()))
 
         return (
-            f"fetched={self.fetched} invalid={self.invalid} matched={self.matched} "
+            f"fetched={self.fetched} invalid={self.invalid} "
+            f"boards={self.boards_polled}/{self.boards_total} board_postings={self.board_postings} "
+            f"matched={self.matched} "
             f"already_handled={self.already_handled} deferred={self.deferred} "
             f"descriptions={self.descriptions_found} scored={self.scored} "
             f"below_threshold={self.below_threshold} drafted={self.drafted} "
             f"dropped_edits={self.dropped_edits} posted={self.posted} failed={self.failed} "
             f"state_size={self.state_size} month_usd={self.month_usd:.4f} "
             f"unscored[{counts(self.unscored)}] draft_failures[{counts(self.draft_failures)}] "
-            f"rejected[{counts(self.rejected)}]"
+            f"rejected[{counts(self.rejected)}] lag[{self.lag_text}]"
         )
+
+    @property
+    def boards_alarming(self) -> bool:
+        return bool(self.boards_total) and (
+            len(self.board_failures) / self.boards_total >= BOARD_FAILURE_ALERT_RATIO
+        )
+
+    @property
+    def source_failed(self) -> bool:
+        return self.simplify_failure is not None or self.boards_alarming
 
 
 @dataclass(frozen=True)
@@ -113,7 +155,11 @@ class Evaluator:
 
     def evaluate(self, match: Match, summary: RunSummary) -> Evaluation:
         posting = match.posting
-        description = self._fetcher.fetch(str(posting.url))
+        description = (
+            Description(posting.description, posting.source)
+            if posting.description
+            else self._fetcher.fetch(str(posting.url))
+        )
         summary.descriptions_found += description.found
         try:
             score = self._scorer.score(posting, description.text)
@@ -186,18 +232,18 @@ def post_evaluations(
     Like stamping an envelope "sent" before it goes in the mailbox: a crash can lose a
     post, but a re-run can never send it twice.
     """
-    failed: list[str] = []
+    failed: list[Posting] = []
     consecutive_failures = 0
     for index, (evaluation, decision) in enumerate(to_post):
         key = evaluation.match.posting.key
         if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
-            failed.extend(item.match.posting.key for item, _ in to_post[index:])
+            failed.extend(item.match.posting for item, _ in to_post[index:])
             log.error("stopping after %d consecutive Discord failures", consecutive_failures)
             break
         try:
             hooks.matches.send(score_card_payload(evaluation, decision, hooks.ping_user_id))
         except DiscordError as exc:
-            failed.append(key)
+            failed.append(evaluation.match.posting)
             consecutive_failures += 1
             log.warning("post failed for %s: %s", key, exc)
             continue
@@ -212,9 +258,55 @@ def post_evaluations(
                 log.warning("drafts post failed for %s: %s", key, exc)
 
     if failed:
-        state.posted -= set(failed)
+        for posting in failed:
+            state.posted -= posting.keys
         store.persist(state, f"release {len(failed)} failed postings")
     summary.failed = len(failed)
+
+
+def merge_sources(
+    board_postings: list[Posting],
+    simplify_postings: list[Posting],
+    published: dict[str, datetime],
+    lag: LagStats,
+) -> list[Posting]:
+    """Combine sources, keeping the board copy when Simplify lists the same job.
+
+    The board copy has the employer's real publish time and the description. Each overlap
+    is also a free measurement of how long Simplify takes to list a job after the
+    employer publishes it.
+    """
+    board_keys = set().union(*(posting.keys for posting in board_postings))
+    merged = list(board_postings)
+    for posting in simplify_postings:
+        for alias in posting.keys - {posting.key}:
+            if alias in published:
+                delay = (posting.posted_at - published[alias]).total_seconds() / 60
+                lag.record_simplify_delay(posting.key, delay)
+        if not posting.keys & board_keys:
+            merged.append(posting)
+    return merged
+
+
+def record_radar_lag(posting: Posting, lag: LagStats, now: datetime) -> None:
+    """Count only postings published after their source was first polled, so the backlog
+    found on a board's first poll doesn't read as hours of lag."""
+    first_polled = lag.first_polled.get(posting.board or posting.source)
+    if first_polled and posting.posted_at >= datetime.fromisoformat(first_polled):
+        lag.record_radar(posting.source, (now - posting.posted_at).total_seconds() / 60)
+
+
+def lag_report(lag: LagStats) -> str:
+    def stats(samples: list[float]) -> str:
+        if not samples:
+            return "n=0"
+        ordered = sorted(samples)
+        p90 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.9))]
+        return f"median {statistics.median(ordered):.0f}m p90 {p90:.0f}m n={len(ordered)}"
+
+    parts = [f"{source}: {stats(samples)}" for source, samples in sorted(lag.radar_minutes.items())]
+    parts.append(f"simplify after board: {stats(lag.simplify_delay_minutes)}")
+    return "; ".join(parts)
 
 
 def run(
@@ -225,32 +317,64 @@ def run(
     ai: AiConfig | None,
     now: datetime,
     force_heartbeat: bool = False,
+    boards: list[WatchlistBoard] | None = None,
 ) -> RunSummary:
     summary = RunSummary()
-    simplify = settings.sources.simplify
-    feed = load_postings(client, simplify.url, simplify.max_invalid_ratio)
-    summary.fetched = feed.total
-    summary.invalid = feed.invalid
-
+    state = store.load()
+    lag_before = state.lag.model_dump_json()
+    state.usage.roll(local_date(now, settings))
     posting_filter = PostingFilter(
         settings.filters,
         settings.locations,
         settings.excluded_companies,
         max_age=timedelta(hours=settings.delivery.max_post_age_hours),
     )
-    result = posting_filter.apply(feed.postings, now)
+
+    simplify_postings: list[Posting] = []
+    simplify = settings.sources.simplify
+    try:
+        feed = load_postings(client, simplify.url, simplify.max_invalid_ratio)
+    except SimplifyFeedError as exc:
+        summary.simplify_failure = str(exc)
+        log.error("simplify failed: %s", exc)
+    else:
+        summary.fetched, summary.invalid = feed.total, feed.invalid
+        simplify_postings = feed.postings
+        state.lag.first_polled.setdefault("simplify", now.isoformat())
+
+    def wants(source: Source, title: str, posted_at: datetime, keys: frozenset[str]) -> bool:
+        return posting_filter.worth_fetching(source, title, posted_at, now) and not state.handled(
+            keys
+        )
+
+    board_result = BoardResult()
+    if boards:
+        board_source = BoardSource(client, settings.scoring.max_description_chars)
+        board_result = board_source.fetch(boards, wants)
+    summary.boards_total = len(boards or [])
+    summary.boards_polled = len(board_result.polled)
+    summary.board_postings = len(board_result.postings)
+    summary.board_failures = board_result.failures
+    for board_key in board_result.polled:
+        state.lag.first_polled.setdefault(board_key, now.isoformat())
+    for board_key, reason in sorted(board_result.failures.items()):
+        log.warning("board %s failed: %s", board_key, reason)
+
+    postings = merge_sources(
+        board_result.postings, simplify_postings, board_result.published, state.lag
+    )
+    result = posting_filter.apply(postings, now)
     summary.matched = len(result.matches)
     summary.rejected = result.rejected
 
-    state = store.load()
-    state.usage.roll(local_date(now, settings))
     fresh = sorted(
-        (match for match in result.matches if not state.handled(match.posting.key)),
+        (match for match in result.matches if not state.handled(match.posting.keys)),
         key=lambda match: match.posting.posted_at,
     )
     summary.already_handled = summary.matched - len(fresh)
     batch = fresh[: settings.delivery.max_posts_per_run]
     summary.deferred = len(fresh) - len(batch)
+    summary.lag_text = lag_report(state.lag)
 
     if hooks is None or ai is None:
         for match in batch:
@@ -268,15 +392,16 @@ def run(
     evaluator = Evaluator(settings, client, ai, budget)
     to_post: list[tuple[Evaluation, Decision]] = []
     for match in batch:
+        record_radar_lag(match.posting, state.lag, now)
         evaluation = evaluator.evaluate(match, summary)
         decision = decide(evaluation, settings.thresholds, settings.quiet_hours, now)
-        key = match.posting.key
         if decision.post:
             to_post.append((evaluation, decision))
         else:
-            state.scored_below.add(key)
+            state.scored_below |= match.posting.keys
             summary.below_threshold += 1
-            log.info("below threshold %s", key)
+            log.info("below threshold %s", match.posting.key)
+    summary.lag_text = lag_report(state.lag)
 
     alert_budget = bool(summary.budget_note) and state.usage.budget_alert_day != state.usage.day
     if alert_budget:
@@ -286,14 +411,15 @@ def run(
         state.usage.heartbeat_day = state.usage.day
 
     if batch:
-        state.posted |= {evaluation.match.posting.key for evaluation, _ in to_post}
+        for evaluation, _ in to_post:
+            state.posted |= evaluation.match.posting.keys
         store.persist(
             state,
             f"reserve {len(to_post)} postings, {summary.below_threshold} below threshold",
         )
         post_evaluations(to_post, state, store, hooks, summary)
-    elif summary.heartbeat_due:
-        store.persist(state, "record heartbeat")
+    elif summary.heartbeat_due or state.lag.model_dump_json() != lag_before:
+        store.persist(state, "record heartbeat and lag")
 
     summary.state_size = len(state.posted)
     summary.month_usd = state.usage.month_usd
@@ -343,6 +469,15 @@ def problems_text(summary: RunSummary) -> str | None:
     unscored = {reason: n for reason, n in summary.unscored.items() if reason != "budget"}
     drafts = {reason: n for reason, n in summary.draft_failures.items() if reason != "budget"}
     parts = []
+    if summary.simplify_failure:
+        parts.append(f"Simplify feed failed ({summary.simplify_failure})")
+    if summary.boards_alarming:
+        detail = ", ".join(
+            f"{key}: {reason}" for key, reason in sorted(summary.board_failures.items())
+        )
+        parts.append(
+            f"{len(summary.board_failures)} of {summary.boards_total} boards failed ({detail})"
+        )
     if summary.failed:
         parts.append(f"{summary.failed} postings failed to send and will retry next run")
     if unscored:
@@ -362,7 +497,9 @@ def heartbeat_text(summary: RunSummary, now: datetime, settings: Settings) -> st
         f"This run fetched {summary.fetched} listings, {summary.matched} passed filters, "
         f"{summary.posted} new posted. {summary.state_size} postings delivered so far. "
         f"API spend this month: ${summary.month_usd:.2f} of "
-        f"${settings.budget.monthly_usd_hard_cap:.2f}."
+        f"${settings.budget.monthly_usd_hard_cap:.2f}. "
+        f"Boards polled: {summary.boards_polled} of {summary.boards_total}. "
+        f"Detection lag: {summary.lag_text}."
     )
 
 
@@ -433,7 +570,10 @@ def execute(
             )
             ai = AiConfig(make_anthropic_client(settings.scoring), Resumes.from_env())
 
-        summary = run(settings, client, store, hooks, ai, now, force_heartbeat=args.heartbeat)
+        boards = load_watchlist(settings.watchlist_path, settings.excluded_companies)
+        summary = run(
+            settings, client, store, hooks, ai, now, force_heartbeat=args.heartbeat, boards=boards
+        )
         log.info("run complete: %s", summary.describe())
 
         problems = problems_text(summary)
@@ -444,7 +584,7 @@ def execute(
                 errors_hook.send(text_payload(heartbeat_text(summary, now, settings)))
             except DiscordError as exc:
                 log.warning("heartbeat failed: %s", exc)
-        return 1 if summary.failed else 0
+        return 1 if summary.failed or summary.source_failed else 0
     except Exception as exc:
         message = describe_exception(exc)
         log.error("run failed: %s", message)

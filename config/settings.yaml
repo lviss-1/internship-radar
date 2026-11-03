@@ -227,6 +227,7 @@ locations:
       - Farmingdale
   aliases:
     NYC: New York, NY
+    New York: New York, NY
     SF: San Francisco, CA
     South SF: South San Francisco, CA
     LA: Los Angeles, CA
@@ -237,3 +238,47 @@ locations:
     - u.s.a.
     - united states
     - united states of america
+  # Used only when a location lists cities without states and every part is
+  # in this list ("San Francisco, New York City, Seattle").
+  us_cities:
+    New York: NY
+    New York City: NY
+    Brooklyn: NY
+    Jersey City: NJ
+    Hoboken: NJ
+    Stamford: CT
+    Boston: MA
+    Philadelphia: PA
+    Pittsburgh: PA
+    Washington DC: DC
+    Atlanta: GA
+    Miami: FL
+    Raleigh: NC
+    Nashville: TN
+    Chicago: IL
+    Detroit: MI
+    Minneapolis: MN
+    Austin: TX
+    Dallas: TX
+    Houston: TX
+    Denver: CO
+    Boulder: CO
+    Salt Lake City: UT
+    Phoenix: AZ
+    Seattle: WA
+    Bellevue: WA
+    Redmond: WA
+    Portland: OR
+    San Francisco: CA
+    South San Francisco: CA
+    San Jose: CA
+    Palo Alto: CA
+    Mountain View: CA
+    Sunnyvale: CA
+    Menlo Park: CA
+    Redwood City: CA
+    Oakland: CA
+    Los Angeles: CA
+    San Diego: CA
+    Irvine: CA
+    Costa Mesa: CA

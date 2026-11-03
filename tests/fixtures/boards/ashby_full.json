@@ -1,0 +1,84 @@
+{
+ "apiVersion": "1",
+ "jobs": [
+  {
+   "id": "e66c6658-9e65-4c58-8db2-844628b6e8f8",
+   "title": "Software Engineer Intern (Winter 2027)",
+   "location": "San Francisco, California",
+   "secondaryLocations": [
+    {
+     "location": "New York, New York",
+     "address": {
+      "postalAddress": {
+       "addressRegion": "New York",
+       "addressCountry": "United States",
+       "addressLocality": "New York"
+      }
+     }
+    }
+   ],
+   "publishedAt": "2026-08-14T19:05:18.297+00:00",
+   "isListed": true,
+   "isRemote": true,
+   "workplaceType": "Hybrid",
+   "jobUrl": "https://jobs.ashbyhq.com/notion/e66c6658-9e65-4c58-8db2-844628b6e8f8",
+   "address": {
+    "postalAddress": {
+     "addressRegion": "California",
+     "addressCountry": "United States",
+     "addressLocality": "San Francisco"
+    }
+   },
+   "descriptionPlain": "WHO WE ARE\n\nNotion is the collaborative AI workspace where teams and agents think together https://www.youtube.com/watch?v=vkpYpWfEK5s. We're building one place where your knowledge, projects, meetings, and AI tools live side by side, so work is faster, clearer, and less fragmented. Millions of indi"
+  },
+  {
+   "id": "1fc309c8-da20-4ff2-84c7-8b863ece2b0a",
+   "title": "Software Engineer, AI Connections (Developer Platform)",
+   "location": "San Francisco, California",
+   "secondaryLocations": [
+    {
+     "location": "New York, New York",
+     "address": {
+      "postalAddress": {
+       "addressRegion": "New York",
+       "addressCountry": "United States",
+       "addressLocality": "New York"
+      }
+     }
+    }
+   ],
+   "publishedAt": "2026-08-24T14:44:49.699+00:00",
+   "isListed": true,
+   "isRemote": true,
+   "workplaceType": "Hybrid",
+   "jobUrl": "https://jobs.ashbyhq.com/notion/1fc309c8-da20-4ff2-84c7-8b863ece2b0a",
+   "address": {
+    "postalAddress": {
+     "addressRegion": "California",
+     "addressCountry": "United States",
+     "addressLocality": "San Francisco"
+    }
+   },
+   "descriptionPlain": "WHO WE ARE\n\nNotion is the collaborative AI workspace where teams and agents think together https://www.youtube.com/watch?v=vkpYpWfEK5s. We're building one place where your knowledge, projects, meetings, and AI tools live side by side, so work is faster, clearer, and less fragmented. Millions of indi"
+  },
+  {
+   "id": "43b37ac5-1ce9-4106-8df1-1ae8515087ee",
+   "title": "Enterprise Solutions Consultant (Atlanta, GA)",
+   "location": "Atlanta, Georgia",
+   "secondaryLocations": [],
+   "publishedAt": "2026-07-27T13:01:22.995+00:00",
+   "isListed": true,
+   "isRemote": true,
+   "workplaceType": "Remote",
+   "jobUrl": "https://jobs.ashbyhq.com/notion/43b37ac5-1ce9-4106-8df1-1ae8515087ee",
+   "address": {
+    "postalAddress": {
+     "addressRegion": "Georgia",
+     "addressCountry": "United States",
+     "addressLocality": "Atlanta"
+    }
+   },
+   "descriptionPlain": "WHO WE ARE\n\nNotion is the collaborative AI workspace where teams and agents think together https://www.youtube.com/watch?v=vkpYpWfEK5s. We're building one place where your knowledge, projects, meetings, and AI tools live side by side, so work is faster, clearer, and less fragmented. Millions of indi"
+  }
+ ]
+}

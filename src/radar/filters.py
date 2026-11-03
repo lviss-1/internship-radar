@@ -23,6 +23,28 @@ US_STATES: dict[str, str] = {
 }  # fmt: skip
 _STATE_BY_NAME = {name.lower(): code for code, name in US_STATES.items()}
 _TYPO_PERIOD_BEFORE_STATE = re.compile(r"\.\s+(?=[A-Za-z]{2}$)")
+CANADIAN_PROVINCES = frozenset(
+    {"ON", "QC", "BC", "AB", "MB", "SK", "NS", "NB", "NL", "PE", "YT", "NT", "NU"}
+)
+_LOCATION_SEPARATORS = re.compile(r"\s*(?:;|•|\||\n| / )\s*")
+_QUALIFIER_PREFIX = re.compile(
+    r"^(?:hybrid|on-?site|in-?office)\b\s*(?:[-:\u2013\u2014]\s*)?", re.I
+)
+_TRAILING_NOTE = re.compile(r"\s*(?:\([^)]*\)|\bHQ\b)\s*$", re.I)
+
+
+def split_locations(raw: str) -> list[str]:
+    """Break multi-location strings ("SF, CA • New York, NY", "A; B") into single places
+    and drop work-mode qualifiers ("Hybrid - ", "(HQ)") that carry no geography."""
+    places = []
+    for piece in _LOCATION_SEPARATORS.split(raw):
+        piece = _QUALIFIER_PREFIX.sub("", piece.strip())
+        if not piece.lower().startswith("remote"):
+            while (stripped := _TRAILING_NOTE.sub("", piece)) != piece:
+                piece = stripped
+        if piece.strip():
+            places.append(piece.strip())
+    return places
 
 
 class LocationKind(IntEnum):
@@ -110,6 +132,9 @@ class LocationClassifier:
             state.upper(): {_normalize_place(city) for city in cities}
             for state, cities in settings.in_person_cities.items()
         }
+        self._us_cities = {
+            _normalize_place(city): state for city, state in settings.us_cities.items()
+        }
 
     def classify(self, raw: str) -> LocationKind:
         text = raw.strip()
@@ -126,16 +151,30 @@ class LocationClassifier:
                 return LocationKind.OTHER_US
         if not parts:
             return LocationKind.NOT_US
+        if len(parts) >= 2 and parts[-2].upper() in CANADIAN_PROVINCES:
+            return LocationKind.NOT_US
 
         state = _state_code(parts[-1])
         if state is None:
-            return LocationKind.NOT_US
+            return self._classify_city_list(parts)
         if state in self._in_person_states:
             return LocationKind.IN_PERSON
         cities = self._in_person_cities.get(state, set())
         if any(_normalize_place(part) in cities for part in parts[:-1]):
             return LocationKind.IN_PERSON
         return LocationKind.OTHER_US
+
+    def _classify_city_list(self, parts: list[str]) -> LocationKind:
+        """Handle state-less lists like "San Francisco, New York City, Seattle".
+
+        Only when every part is a known US city, so "Cambridge, UK" can't turn American.
+        """
+        states = [self._us_cities.get(_normalize_place(part)) for part in parts]
+        if not all(states):
+            return LocationKind.NOT_US
+        return max(
+            self.classify(f"{part}, {state}") for part, state in zip(parts, states, strict=True)
+        )
 
     def _classify_remote(self, text: str) -> LocationKind:
         region = re.sub(r"^remote\s*(?:[-:,(]\s*)?(?:in\s+)?", "", text, flags=re.IGNORECASE)
@@ -145,7 +184,8 @@ class LocationClassifier:
         return LocationKind.NOT_US
 
     def best(self, locations: list[str]) -> LocationKind:
-        return max((self.classify(location) for location in locations), default=LocationKind.NOT_US)
+        places = (place for location in locations for place in split_locations(location))
+        return max((self.classify(place) for place in places), default=LocationKind.NOT_US)
 
 
 class PostingFilter:
@@ -203,6 +243,15 @@ class PostingFilter:
             tags.append(Tag.RELOCATION_UNKNOWN)
 
         return Match(posting=posting, location_kind=location_kind, tags=tuple(tags))
+
+    def worth_fetching(self, source: str, title: str, posted_at: datetime, now: datetime) -> bool:
+        """The checks that need only a title and a date, used before paying for a detail call."""
+        lowered = title.lower()
+        return (
+            now - posted_at <= self._max_age
+            and not (self._excluded_title_pattern and self._excluded_title_pattern.search(lowered))
+            and self._is_intern_level(source, lowered)
+        )
 
     def apply(self, postings: list[Posting], now: datetime) -> FilterResult:
         result = FilterResult()

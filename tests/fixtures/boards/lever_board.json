@@ -1,0 +1,66 @@
+[
+ {
+  "id": "e8a190f0-7a89-4c11-a6a0-452ff6234749",
+  "text": "Administrative Business Partner, Floater",
+  "categories": {
+   "commitment": "Full-time",
+   "department": "Executive Office",
+   "location": "Foster City, CA",
+   "team": "Executive Office",
+   "allLocations": [
+    "Foster City, CA"
+   ]
+  },
+  "createdAt": 1791307664932,
+  "hostedUrl": "https://jobs.lever.co/zoox/e8a190f0-7a89-4c11-a6a0-452ff6234749",
+  "workplaceType": "hybrid",
+  "country": "US",
+  "openingPlain": "",
+  "descriptionPlain": "Zoox is building the future of transportation. To do that, we\u2019re also building an incredible crew\u2014united by our mission, energized by our values, and driven by our purpose. We are looking to hire an e",
+  "lists": [],
+  "additionalPlain": ""
+ },
+ {
+  "id": "8befaec7-bb9f-4cf3-a48c-46b5e3886bf3",
+  "text": "Administrative Business Partner, Product",
+  "categories": {
+   "commitment": "Full-time",
+   "department": "Product, Features & Homologation",
+   "location": "Foster City, CA",
+   "team": "Product and Experience",
+   "allLocations": [
+    "Foster City, CA"
+   ]
+  },
+  "createdAt": 1792604051949,
+  "hostedUrl": "https://jobs.lever.co/zoox/8befaec7-bb9f-4cf3-a48c-46b5e3886bf3",
+  "workplaceType": "hybrid",
+  "country": "US",
+  "openingPlain": "",
+  "descriptionPlain": "Zoox is building the future of transportation. To do that, we\u2019re also building an incredible crew\u2014united by our mission, energized by our values, and driven by our purpose. We are looking to hire an e",
+  "lists": [],
+  "additionalPlain": ""
+ },
+ {
+  "id": "7980e9a3-99f3-4988-ae6d-355c9199d8fb",
+  "text": "Body Structures Engineer",
+  "categories": {
+   "commitment": "Full-time",
+   "department": "Vehicle Development",
+   "level": "All Levels",
+   "location": "Foster City, CA",
+   "team": "Body, Closures and Chassis",
+   "allLocations": [
+    "Foster City, CA"
+   ]
+  },
+  "createdAt": 1789072867958,
+  "hostedUrl": "https://jobs.lever.co/zoox/7980e9a3-99f3-4988-ae6d-355c9199d8fb",
+  "workplaceType": "onsite",
+  "country": "US",
+  "openingPlain": "",
+  "descriptionPlain": "At Zoox, you\u2019ll collaborate with a team of world-class engineers with diverse backgrounds in areas such as AI, robotics, mechatronics, planning, machine learning, control, localization, computer visio",
+  "lists": [],
+  "additionalPlain": ""
+ }
+]

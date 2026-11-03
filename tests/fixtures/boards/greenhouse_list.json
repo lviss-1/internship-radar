@@ -1,0 +1,40 @@
+{
+ "jobs": [
+  {
+   "id": 8181440,
+   "title": "Applied Science Intern",
+   "location": {
+    "name": "Paris, France"
+   },
+   "absolute_url": "https://careers.datadoghq.com/detail/8181440/?gh_jid=8181440",
+   "first_published": "2026-09-08T10:09:29-04:00",
+   "updated_at": "2026-09-29T13:18:57-04:00",
+   "company_name": "Datadog"
+  },
+  {
+   "id": 8257324,
+   "title": "Accounts Payable Analyst",
+   "location": {
+    "name": "New York, New York, USA"
+   },
+   "absolute_url": "https://careers.datadoghq.com/detail/8257324/?gh_jid=8257324",
+   "first_published": "2026-10-06T10:42:08-04:00",
+   "updated_at": "2026-10-06T10:42:08-04:00",
+   "company_name": "Datadog"
+  },
+  {
+   "id": 7194969,
+   "title": "AI Research Engineer - Datadog AI Research (DAIR)",
+   "location": {
+    "name": "Paris, France"
+   },
+   "absolute_url": "https://careers.datadoghq.com/detail/7194969/?gh_jid=7194969",
+   "first_published": "2025-08-27T10:34:20-04:00",
+   "updated_at": "2026-09-29T13:18:57-04:00",
+   "company_name": "Datadog"
+  }
+ ],
+ "meta": {
+  "total": 3
+ }
+}

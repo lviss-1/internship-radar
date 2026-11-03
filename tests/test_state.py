@@ -1,7 +1,9 @@
 import json
 import re
 import subprocess
-from datetime import date
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -10,21 +12,33 @@ import httpx2
 import pytest
 import respx
 
+from radar.ats import Board
 from radar.config import Settings
 from radar.discord import DiscordError
-from radar.main import AiConfig, Hooks, RunSummary, run
+from radar.main import AiConfig, Hooks, RunSummary, problems_text, record_radar_lag, run
 from radar.net import make_client
+from radar.sources.boards import WatchlistBoard
 from radar.state import (
+    LAG_FILENAME,
     SEEN_FILENAME,
     USAGE_FILENAME,
     FileStateStore,
     GitStateStore,
+    LagStats,
     RadarState,
     StateError,
     UsageLedger,
     load_seen,
 )
-from tests.conftest import FEED_URL, NOW, RESUMES, FakeClaude, anthropic_fixture, message_json
+from tests.conftest import (
+    FEED_URL,
+    NOW,
+    RESUMES,
+    FakeClaude,
+    anthropic_fixture,
+    make_posting,
+    message_json,
+)
 
 # Scores the fake model gives each company in tests/fixtures/simplify_listings.json.
 SCORES = {
@@ -80,8 +94,15 @@ class RecordingStore(FileStateStore):
         self.events = events
 
     def persist(self, state: RadarState, message: str) -> None:
-        self.events.append(f"persist posted={len(state.posted)} below={len(state.scored_below)}")
+        self.events.append(
+            f"persist posted={own_keys(state.posted)} below={own_keys(state.scored_below)}"
+        )
         super().persist(state, message)
+
+
+def own_keys(keys: set[str]) -> int:
+    """Count postings by their source key; aliases like greenhouse:123 ride along."""
+    return sum(key.startswith("simplify:") for key in keys)
 
 
 @pytest.fixture
@@ -98,11 +119,14 @@ def run_once(
     matches: RecordingHook,
     errors: RecordingHook | None = None,
     claude: FakeClaude | None = None,
+    boards: list[WatchlistBoard] | None = None,
 ) -> RunSummary:
     claude = claude or FakeClaude(fake_model)
     hooks = Hooks(matches=matches, errors=errors or RecordingHook(), ping_user_id="42")  # type: ignore[arg-type]
     with make_client() as client:
-        return run(settings, client, store, hooks, AiConfig(claude.client, RESUMES), NOW)
+        return run(
+            settings, client, store, hooks, AiConfig(claude.client, RESUMES), NOW, boards=boards
+        )
 
 
 def card_titles(hook: RecordingHook) -> list[str]:
@@ -133,7 +157,11 @@ def test_round_trip_holds_ids_and_numbers_only(tmp_path: Path) -> None:
         "scored_below": ["simplify:c"],
     }
     assert store.load().usage == usage
-    assert sorted(p.name for p in tmp_path.iterdir()) == [SEEN_FILENAME, USAGE_FILENAME]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        LAG_FILENAME,
+        SEEN_FILENAME,
+        USAGE_FILENAME,
+    ]
 
 
 @pytest.mark.parametrize(
@@ -197,7 +225,8 @@ def test_scored_pipeline_posts_and_records_correctly(
     assert "content" not in cards["Nokia"] and cards["Nokia"]["flags"] != 0
     assert cards["Entrust"]["embeds"][0]["fields"][0]["value"] == "Unscored (refused)"
     assert len(drafts) == 2
-    assert len(state.scored_below) == 1 and len(state.posted) == 6
+    assert own_keys(state.scored_below) == 1 and own_keys(state.posted) == 6
+    assert {key for key in state.posted if key.startswith("greenhouse:")}
     assert (summary.scored, summary.drafted, summary.dropped_edits) == (6, 2, 2)
     assert summary.unscored == {"refused": 1}
     assert state.usage.day_calls == 9
@@ -281,7 +310,7 @@ def test_consecutive_discord_failures_stop_and_release_everything(
     assert len(sends) == 3
     assert (summary.posted, summary.failed) == (0, 6)
     assert store.load().posted == set()
-    assert len(store.load().scored_below) == 1
+    assert own_keys(store.load().scored_below) == 1
 
 
 def test_budget_exhaustion_posts_unscored_and_alerts_once_per_day(
@@ -361,3 +390,111 @@ def test_heartbeat_is_due_on_first_run_of_the_day_only(
 
     assert (first.heartbeat_due, second.heartbeat_due) == (True, False)
     assert store.load().usage.heartbeat_day == "2026-11-02"
+
+
+A16Z = WatchlistBoard("Andreessen Horowitz", Board.GREENHOUSE, "a16z")
+A16Z_JOB = 8046730003
+A16Z_SIMPLIFY_POSTED = datetime.fromtimestamp(1793401464, tz=UTC)
+GH = "https://boards-api.greenhouse.io/v1/boards"
+
+
+@contextmanager
+def sources(raw_listings: list[dict[str, Any]], **overrides: httpx.Response) -> Iterator[None]:
+    """Mock the feed and the a16z board; `overrides` replaces either by name."""
+    listing = {
+        "jobs": [
+            {
+                "id": A16Z_JOB,
+                "title": "Research Intern - Frontier",
+                "location": {"name": "New York, NY"},
+                "absolute_url": f"https://a16z.com/about/jobs/?gh_jid={A16Z_JOB}",
+                "first_published": (A16Z_SIMPLIFY_POSTED - timedelta(hours=3)).isoformat(),
+            }
+        ]
+    }
+    detail = {"content": "&lt;p&gt;Research the frontier.&lt;/p&gt;", "offices": []}
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(FEED_URL).mock(
+            return_value=overrides.get("feed", httpx.Response(200, json=raw_listings))
+        )
+        mock.get(f"{GH}/a16z/jobs").mock(
+            return_value=overrides.get("board", httpx.Response(200, json=listing))
+        )
+        mock.get(f"{GH}/a16z/jobs/{A16Z_JOB}").mock(return_value=httpx.Response(200, json=detail))
+        mock.route().mock(return_value=httpx.Response(404))
+        yield
+
+
+def test_board_copy_wins_and_simplify_copy_never_posts(
+    settings: Settings, tmp_path: Path, raw_listings: list[dict[str, Any]]
+) -> None:
+    store = FileStateStore(tmp_path)
+    first, second = RecordingHook(), RecordingHook()
+
+    with sources(raw_listings):
+        run_once(settings, store, first, boards=[A16Z])
+        run_once(settings, store, second, boards=[A16Z])
+
+    a16z_cards = [c for c in first.cards() if c["embeds"][0]["title"].startswith("Andreessen")]
+    state = store.load()
+    assert len(a16z_cards) == 1
+    assert a16z_cards[0]["embeds"][0]["footer"]["text"] == "greenhouse"
+    assert f"greenhouse:{A16Z_JOB}" in state.posted
+    assert len(first.cards()) == 6 and second.cards() == []
+    assert state.lag.simplify_delay_minutes == [180.0]
+    assert state.lag.first_polled.keys() == {"simplify", "greenhouse/a16z"}
+
+
+def test_failing_board_is_reported_without_stopping_simplify(
+    settings: Settings, tmp_path: Path, raw_listings: list[dict[str, Any]]
+) -> None:
+    with sources(raw_listings, board=httpx.Response(404)):
+        summary = run_once(settings, FileStateStore(tmp_path), RecordingHook(), boards=[A16Z])
+
+    assert summary.posted == 6
+    assert summary.board_failures == {"greenhouse/a16z": "HTTP 404"}
+    assert summary.source_failed
+    assert "1 of 1 boards failed (greenhouse/a16z: HTTP 404)" in (problems_text(summary) or "")
+
+
+def test_failing_simplify_feed_does_not_stop_boards(
+    settings: Settings, tmp_path: Path, raw_listings: list[dict[str, Any]]
+) -> None:
+    matches = RecordingHook()
+
+    with sources(raw_listings, feed=httpx.Response(500)):
+        summary = run_once(settings, FileStateStore(tmp_path), matches, boards=[A16Z])
+
+    assert summary.simplify_failure is not None
+    assert summary.source_failed
+    assert [c["embeds"][0]["footer"]["text"] for c in matches.cards()] == ["greenhouse"]
+    assert "Simplify feed failed" in (problems_text(summary) or "")
+
+
+def test_radar_lag_ignores_backlog_from_before_the_first_poll() -> None:
+    lag = LagStats(first_polled={"greenhouse/a16z": "2026-11-02T12:00:00+00:00"})
+    backlog = make_board_posting(posted_at=datetime(2026, 11, 2, 11, 0, tzinfo=UTC))
+    fresh = make_board_posting(posted_at=datetime(2026, 11, 2, 15, 30, tzinfo=UTC))
+
+    record_radar_lag(backlog, lag, NOW)
+    record_radar_lag(fresh, lag, NOW)
+
+    assert lag.radar_minutes == {"greenhouse": [30.0]}
+
+
+def test_lag_samples_are_capped_and_pairs_counted_once() -> None:
+    lag = LagStats()
+    for minute in range(250):
+        lag.record_radar("greenhouse", float(minute))
+    lag.record_simplify_delay("simplify:a", 60.0)
+    lag.record_simplify_delay("simplify:a", 90.0)
+
+    assert len(lag.radar_minutes["greenhouse"]) == 200
+    assert lag.radar_minutes["greenhouse"][0] == 50.0
+    assert lag.simplify_delay_minutes == [60.0]
+
+
+def make_board_posting(posted_at: datetime) -> Any:
+    return make_posting(
+        source="greenhouse", source_id="1", board="greenhouse/a16z", posted_at=posted_at
+    )

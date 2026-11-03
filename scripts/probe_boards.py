@@ -20,11 +20,11 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import yaml
 
+from radar.ats import Board, parse_ats_url
 from radar.config import load_settings
 from radar.net import NetworkError, make_client, request_with_retries
 from radar.sources.simplify import SimplifyFeedError, fetch_listings
@@ -37,12 +37,6 @@ DESCRIPTION_SAMPLE = 10
 MENTION_RATIO = 0.5
 LEVER_MIN_INTERVAL = 1.05
 DEFAULT_MIN_INTERVAL = 0.25
-
-
-class Board(StrEnum):
-    GREENHOUSE = "greenhouse"
-    LEVER = "lever"
-    ASHBY = "ashby"
 
 
 class Status(StrEnum):
@@ -124,24 +118,8 @@ def names_match(found: str, company: SeedCompany) -> bool:
 
 def board_from_url(url: str) -> tuple[Board, str] | None:
     """Extract (board, slug) from a job URL hosted on a supported ATS."""
-    try:
-        parts = urlsplit(url.strip())
-    except ValueError:
-        return None
-    host = (parts.hostname or "").lower()
-    segments = [segment for segment in parts.path.split("/") if segment]
-
-    if host.endswith("greenhouse.io") and "api" not in host:
-        if segments and segments[0] == "embed":
-            slug = parse_qs(parts.query).get("for", [None])[0]
-        else:
-            slug = segments[0] if segments else None
-        return (Board.GREENHOUSE, slug.lower()) if slug else None
-    if host == "jobs.lever.co" and segments:
-        return Board.LEVER, segments[0].lower()
-    if host == "jobs.ashbyhq.com" and segments:
-        return Board.ASHBY, segments[0].lower()
-    return None
+    ref = parse_ats_url(url)
+    return (ref.board, ref.slug) if ref and ref.slug else None
 
 
 def simplify_evidence(records: Iterable[Any]) -> dict[str, set[tuple[Board, str]]]:

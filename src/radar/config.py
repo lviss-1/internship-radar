@@ -3,7 +3,14 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+)
 
 DEFAULT_SETTINGS_PATH = Path("config/settings.yaml")
 
@@ -99,6 +106,7 @@ class LocationSettings(StrictModel):
     in_person_cities: dict[str, list[str]]
     aliases: dict[str, str]
     us_country_names: list[str]
+    us_cities: dict[str, Annotated[str, StringConstraints(pattern=r"^[A-Z]{2}$")]]
 
 
 class Settings(StrictModel):

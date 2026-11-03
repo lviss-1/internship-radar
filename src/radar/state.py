@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -15,6 +16,9 @@ log = logging.getLogger(__name__)
 SEEN_VERSION = 2
 SEEN_FILENAME = "seen.json"
 USAGE_FILENAME = "usage.json"
+LAG_FILENAME = "lag.json"
+LAG_SAMPLES = 200
+MEASURED_PAIRS_KEPT = 2000
 GIT_TIMEOUT_SECONDS = 60
 BOT_NAME = "github-actions[bot]"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
@@ -48,14 +52,38 @@ class UsageLedger(BaseModel):
         self.day_calls += 1
 
 
+class LagStats(BaseModel):
+    """Detection-lag samples in minutes. Numbers, board names and posting IDs only."""
+
+    version: Literal[1] = 1
+    first_polled: dict[str, str] = Field(default_factory=dict)
+    radar_minutes: dict[str, list[float]] = Field(default_factory=dict)
+    simplify_delay_minutes: list[float] = Field(default_factory=list)
+    measured_pairs: list[str] = Field(default_factory=list)
+
+    def record_radar(self, source: str, minutes: float) -> None:
+        samples = self.radar_minutes.setdefault(source, [])
+        samples.append(round(minutes, 1))
+        del samples[:-LAG_SAMPLES]
+
+    def record_simplify_delay(self, simplify_key: str, minutes: float) -> None:
+        if simplify_key in self.measured_pairs:
+            return
+        self.simplify_delay_minutes.append(round(minutes, 1))
+        del self.simplify_delay_minutes[:-LAG_SAMPLES]
+        self.measured_pairs.append(simplify_key)
+        del self.measured_pairs[:-MEASURED_PAIRS_KEPT]
+
+
 @dataclass
 class RadarState:
     posted: set[str] = field(default_factory=set)
     scored_below: set[str] = field(default_factory=set)
     usage: UsageLedger = field(default_factory=UsageLedger)
+    lag: LagStats = field(default_factory=LagStats)
 
-    def handled(self, key: str) -> bool:
-        return key in self.posted or key in self.scored_below
+    def handled(self, keys: Iterable[str]) -> bool:
+        return any(key in self.posted or key in self.scored_below for key in keys)
 
 
 def _read_json(path: Path) -> object:
@@ -91,13 +119,17 @@ def load_seen(path: Path) -> tuple[set[str], set[str]]:
             raise StateError(f"state file {path.name} has an unsupported format")
 
 
-def load_usage(path: Path) -> UsageLedger:
+def _load_model[M: BaseModel](path: Path, model: type[M]) -> M:
     if not path.exists():
-        return UsageLedger()
+        return model()
     try:
-        return UsageLedger.model_validate(_read_json(path))
+        return model.model_validate(_read_json(path))
     except ValidationError as exc:
         raise StateError(f"state file {path.name} has an unsupported format") from exc
+
+
+def load_usage(path: Path) -> UsageLedger:
+    return _load_model(path, UsageLedger)
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -121,6 +153,7 @@ def save_state(directory: Path, state: RadarState) -> None:
     }
     _write_atomic(directory / SEEN_FILENAME, json.dumps(seen, indent=1) + "\n")
     _write_atomic(directory / USAGE_FILENAME, state.usage.model_dump_json(indent=1) + "\n")
+    _write_atomic(directory / LAG_FILENAME, state.lag.model_dump_json(indent=1) + "\n")
 
 
 class StateStore(Protocol):
@@ -136,7 +169,8 @@ class FileStateStore:
     def load(self) -> RadarState:
         posted, scored_below = load_seen(self.directory / SEEN_FILENAME)
         usage = load_usage(self.directory / USAGE_FILENAME)
-        return RadarState(posted=posted, scored_below=scored_below, usage=usage)
+        lag = _load_model(self.directory / LAG_FILENAME, LagStats)
+        return RadarState(posted=posted, scored_below=scored_below, usage=usage, lag=lag)
 
     def persist(self, state: RadarState, message: str) -> None:
         save_state(self.directory, state)
@@ -151,7 +185,7 @@ class GitStateStore(FileStateStore):
 
     def persist(self, state: RadarState, message: str) -> None:
         save_state(self.directory, state)
-        self._git("add", SEEN_FILENAME, USAGE_FILENAME)
+        self._git("add", SEEN_FILENAME, USAGE_FILENAME, LAG_FILENAME)
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
             return
         self._git("-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}",
