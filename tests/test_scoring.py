@@ -229,3 +229,14 @@ def test_unexpected_sdk_errors_fail_one_posting_not_the_run(settings: Settings) 
         scorer_for(settings, fake).score(make_posting(), None)
 
     assert failure.value.reason == "invalid_response"
+
+
+def test_scoring_prompt_treats_co_ops_and_apprenticeships_as_equal(settings: Settings) -> None:
+    fake = respond_with(anthropic_fixture("score_message.json"))
+
+    scorer_for(settings, fake).score(make_posting(title="Software Co-op"), None)
+
+    system = fake.requests[0]["system"][0]["text"]
+    assert "internships, co-ops and apprenticeships" in system
+    assert "never score a posting lower because it is a co-op or apprenticeship" in system
+    assert "Winter 2027" in system

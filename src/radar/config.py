@@ -91,6 +91,13 @@ class FilterSettings(StrictModel):
     non_intern_title_keywords: list[NonEmptyStr]
     excluded_categories: list[NonEmptyStr]
     excluded_title_keywords: list[NonEmptyStr]
+    program_title_keywords: dict[NonEmptyStr, list[NonEmptyStr]]
+    program_extra_seasons: list[str]
+
+    @field_validator("program_title_keywords", mode="after")
+    @classmethod
+    def lowercase_programs(cls, programs: dict[str, list[str]]) -> dict[str, list[str]]:
+        return {label: [kw.strip().lower() for kw in kws] for label, kws in programs.items()}
 
     @field_validator(
         "intern_title_keywords",

@@ -17,8 +17,8 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 BULLET_PREFIX = re.compile(r"^[\s\-\u2013\u2014\u2022\u00b7*]+")
 
 DRAFT_INSTRUCTIONS = """\
-You help a student apply to one internship. They review everything you write and send it \
-themselves.
+You help a student apply to one internship, co-op or apprenticeship. They review everything \
+you write and send it themselves.
 
 Produce:
 - resume_edits: up to 5 edits that make the resume below fit this posting better. Each edit \

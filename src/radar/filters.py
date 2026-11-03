@@ -82,7 +82,7 @@ class Tag(StrEnum):
 class Match:
     posting: Posting
     location_kind: LocationKind
-    tags: tuple[Tag, ...] = ()
+    tags: tuple[str, ...] = ()
 
     @property
     def silent(self) -> bool:
@@ -212,6 +212,12 @@ class PostingFilter:
         self._non_intern_pattern = _keyword_pattern(filters.non_intern_title_keywords)
         self._excluded_title_pattern = _keyword_pattern(filters.excluded_title_keywords)
         self._excluded_categories = set(filters.excluded_categories)
+        self._programs = [
+            (label, pattern)
+            for label, keywords in filters.program_title_keywords.items()
+            if (pattern := _keyword_pattern(keywords)) is not None
+        ]
+        self._program_seasons = {season.lower() for season in filters.program_extra_seasons}
 
     def evaluate(self, posting: Posting, now: datetime) -> Match | RejectReason:
         title = posting.title.lower()
@@ -229,8 +235,10 @@ class PostingFilter:
         if not self._is_intern_level(posting.source, title):
             return RejectReason.NOT_INTERN
 
-        tags: list[Tag] = []
-        season = self._season_status(posting.terms)
+        program = self._program(title)
+        tags: list[str] = [program] if program else []
+        extra_seasons = self._program_seasons if program else set()
+        season = self._season_status(posting.terms, extra_seasons)
         if season is SeasonStatus.MISMATCH:
             return RejectReason.SEASON
         if season is SeasonStatus.UNCONFIRMED:
@@ -277,9 +285,13 @@ class PostingFilter:
             return True
         return bool(self._intern_pattern and self._intern_pattern.search(title))
 
-    def _season_status(self, terms: list[str]) -> SeasonStatus:
+    def _program(self, title: str) -> str | None:
+        """Label co-ops and apprenticeships, which are delivered like internships."""
+        return next((label for label, pattern in self._programs if pattern.search(title)), None)
+
+    def _season_status(self, terms: list[str], extra_seasons: set[str]) -> SeasonStatus:
         normalized = {term.lower() for term in terms if term.strip()}
-        if normalized & self._seasons:
+        if normalized & (self._seasons | extra_seasons):
             return SeasonStatus.CONFIRMED
         if normalized <= self._unconfirmed_terms:
             return SeasonStatus.UNCONFIRMED

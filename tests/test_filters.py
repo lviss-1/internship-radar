@@ -66,7 +66,7 @@ def test_recorded_feed_end_to_end(
     assert microsoft.tags == (Tag.SEASON_UNCONFIRMED,)
     nokia = outcomes["Nokia"]
     assert isinstance(nokia, Match)
-    assert nokia.tags == (Tag.SEASON_UNCONFIRMED, Tag.RELOCATION_UNKNOWN)
+    assert nokia.tags == ("co-op", Tag.SEASON_UNCONFIRMED, Tag.RELOCATION_UNKNOWN)
 
 
 @pytest.mark.parametrize(
@@ -310,3 +310,69 @@ def test_board_location_formats(
 )
 def test_split_locations(raw: str, places: list[str]) -> None:
     assert split_locations(raw) == places
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Software Engineer Co Op (Fall 2027)",
+        "Apprentices - Data",
+        "Cooperative Education - Software",
+        "SWE CoOp",
+        "Software Engineering Apprenticeship Program",
+    ],
+)
+def test_co_op_and_apprenticeship_spellings_count_as_intern_level(
+    posting_filter: PostingFilter, title: str
+) -> None:
+    assert posting_filter.worth_fetching("greenhouse", title, NOW, NOW)
+
+
+@pytest.mark.parametrize(
+    ("title", "label"),
+    [
+        ("Software Engineer Co-op", "co-op"),
+        ("Data Co Op", "co-op"),
+        ("Software Engineering Apprentice", "apprenticeship"),
+    ],
+)
+def test_winter_2027_is_accepted_for_programs(
+    posting_filter: PostingFilter, title: str, label: str
+) -> None:
+    outcome = outcome_for(posting_filter, title=title, terms=["Winter 2027"])
+
+    assert isinstance(outcome, Match)
+    assert outcome.tags == (label,)
+
+
+def test_winter_2027_internship_is_still_rejected(posting_filter: PostingFilter) -> None:
+    outcome = outcome_for(posting_filter, title="Product Manager Intern", terms=["Winter 2027"])
+
+    assert outcome is RejectReason.SEASON
+
+
+def test_winter_and_summer_internship_matches_through_summer(posting_filter: PostingFilter) -> None:
+    outcome = outcome_for(posting_filter, terms=["Winter 2027", "Summer 2027"])
+
+    assert isinstance(outcome, Match) and outcome.tags == ()
+
+
+def test_apprenticeship_without_season_is_tagged_twice(posting_filter: PostingFilter) -> None:
+    outcome = outcome_for(posting_filter, title="Software Apprentice", terms=["N/A"])
+
+    assert isinstance(outcome, Match)
+    assert outcome.tags == ("apprenticeship", Tag.SEASON_UNCONFIRMED)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"category": "Hardware"}, RejectReason.EXCLUDED_CATEGORY),
+        ({"locations": ["Toronto, ON, Canada"]}, RejectReason.LOCATION),
+        ({"terms": ["Winter 2026"]}, RejectReason.SEASON),
+    ],
+)
+def test_co_ops_still_obey_the_other_filters(
+    posting_filter: PostingFilter, overrides: dict[str, Any], reason: RejectReason
+) -> None:
+    assert outcome_for(posting_filter, title="Software Co-op", **overrides) is reason

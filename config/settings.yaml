@@ -73,9 +73,28 @@ filters:
     - internship
     - co-op
     - coop
+    - co op
+    - co-operative
+    - cooperative education
     - apprentice
+    - apprentices
     - apprenticeship
     - student
+  # Co-ops and apprenticeships are delivered like internships and tagged on the card.
+  # Co-op programs commonly label a January-June term "Winter", which overlaps Spring.
+  program_title_keywords:
+    co-op:
+      - co-op
+      - coop
+      - co op
+      - co-operative
+      - cooperative education
+    apprenticeship:
+      - apprentice
+      - apprentices
+      - apprenticeship
+  program_extra_seasons:
+    - Winter 2027
   non_intern_title_keywords:
     - new grad
     - senior

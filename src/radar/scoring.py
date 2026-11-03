@@ -27,13 +27,18 @@ ShortText = Annotated[str, StringConstraints(max_length=300)]
 ResumeChoice = Literal["swe", "pm"]
 
 SCORING_INSTRUCTIONS = """\
-You evaluate internship postings for one candidate and return a JSON assessment.
+You evaluate early-career postings (internships, co-ops and apprenticeships) for one candidate \
+and return a JSON assessment.
 
 The candidate's priorities, highest first:
-1. Software engineering internships.
-2. Technical product management and APM internships.
+1. Software engineering internships, co-ops or apprenticeships.
+2. Technical product management and APM internships, co-ops or apprenticeships.
 3. Adjacent roles: IT, application development, research, data.
-Target terms: Spring, Summer or Fall 2027.
+Target terms: Spring, Summer or Fall 2027. Co-ops labeled Winter 2027 usually run January to \
+June 2027 and count as in range.
+
+Co-ops and apprenticeships are as welcome as internships: never score a posting lower because \
+it is a co-op or apprenticeship rather than an internship.
 
 Two resumes follow. Choose the one that fits the posting better and score against it.
 

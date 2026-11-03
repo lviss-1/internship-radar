@@ -5,7 +5,14 @@ import pytest
 from pydantic import ValidationError
 
 from radar.config import Settings
-from radar.drafts import FALLBACK_BETA, Drafter, DraftResult, ResumeEdit, keep_grounded_edits
+from radar.drafts import (
+    DRAFT_INSTRUCTIONS,
+    FALLBACK_BETA,
+    Drafter,
+    DraftResult,
+    ResumeEdit,
+    keep_grounded_edits,
+)
 from radar.scoring import ScoreResult
 from tests.conftest import SWE_RESUME, FakeClaude, anthropic_fixture, make_budget, make_posting
 
@@ -102,3 +109,7 @@ def test_drafter_uses_strong_model_with_fallback_and_filters_edits(settings: Set
     assert [edit.original for edit in drafts.resume_edits] == [
         "Built a REST API in Python for course scheduling"
     ]
+
+
+def test_draft_prompt_covers_co_ops_and_apprenticeships() -> None:
+    assert "internship, co-op or apprenticeship" in DRAFT_INSTRUCTIONS
