@@ -8,7 +8,13 @@ from radar.alerts import Alert, AlertKind, plan_alerts
 from radar.ats import Board
 from radar.config import Settings
 from radar.discord import DiscordError
-from radar.main import alert_run_failure, send_alerts, track_board_health
+from radar.main import (
+    RunSummary,
+    alert_run_failure,
+    collect_alerts,
+    send_alerts,
+    track_board_health,
+)
 from radar.sources.boards import BoardResult, WatchlistBoard
 from radar.state import FileStateStore, RadarState, UsageLedger
 
@@ -178,3 +184,25 @@ def test_recovery_follows_a_run_failure(hours_later: float) -> None:
     message = plan([], sent, T0 + timedelta(hours=hours_later))
 
     assert message == "• Recovered: Runs are succeeding again."
+
+
+@pytest.mark.parametrize(("age_days", "expected"), [(None, False), (30, False), (46, True)])
+def test_stale_watchlist_reminder(
+    settings: Settings, age_days: float | None, expected: bool
+) -> None:
+    summary = RunSummary(watchlist_age_days=age_days)
+    state = RadarState(usage=UsageLedger(month="2026-11"))
+
+    categories = [alert.category for alert in collect_alerts(summary, state, settings)]
+
+    assert ("watchlist_stale:2026-11" in categories) is expected
+
+
+def test_stale_watchlist_reminder_is_monthly() -> None:
+    stale = Alert("watchlist_stale:2026-11", AlertKind.ONCE, "Re-run discovery.")
+    sent: dict[str, str] = {}
+
+    assert plan([stale], sent, T0) is not None
+    assert plan([stale], sent, T0 + timedelta(days=10)) is None
+    plan([], sent, T0 + timedelta(days=30), month="2026-12")
+    assert sent == {}

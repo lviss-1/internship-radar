@@ -5,7 +5,12 @@ Simplify links to it, its Greenhouse board/company name matches, or most of its
 postings mention the company by name. Slugs that exist without evidence are left
 for manual review instead of being trusted.
 
-Usage: uv run python scripts/probe_boards.py [--seed PATH] [--out PATH]
+Usage:
+  uv run python scripts/probe_boards.py [--seed PATH] [--out PATH]
+      Probe the seed companies. Entries in the `discovered` group are kept.
+  uv run python scripts/probe_boards.py --discover [--max-discovered N]
+      Rebuild the `discovered` group from boards that Simplify links to for listings
+      passing the radar's filters. Seed entries are kept.
 """
 
 import argparse
@@ -13,10 +18,10 @@ import logging
 import re
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -25,9 +30,10 @@ import httpx
 import yaml
 
 from radar.ats import Board, parse_ats_url
-from radar.config import load_settings
+from radar.config import Settings, load_settings
+from radar.filters import Match, PostingFilter
 from radar.net import NetworkError, make_client, request_with_retries
-from radar.sources.simplify import SimplifyFeedError, fetch_listings
+from radar.sources.simplify import SimplifyFeedError, fetch_listings, parse_listings
 
 log = logging.getLogger("probe")
 
@@ -37,6 +43,8 @@ DESCRIPTION_SAMPLE = 10
 MENTION_RATIO = 0.5
 LEVER_MIN_INTERVAL = 1.05
 DEFAULT_MIN_INTERVAL = 0.25
+DEFAULT_MAX_DISCOVERED = 150
+DISCOVERED_GROUP = "discovered"
 
 
 class Status(StrEnum):
@@ -330,26 +338,154 @@ def load_seed(path: Path, excluded: list[str]) -> list[SeedCompany]:
     return companies
 
 
-def write_watchlist(path: Path, results: list[Result]) -> None:
+@dataclass(frozen=True)
+class DiscoveryCandidate:
+    board: Board
+    slug: str
+    company: str
+    listings: int
+
+
+def discovery_candidates(
+    records: list[Any], settings: Settings, known: set[tuple[str, str]]
+) -> list[DiscoveryCandidate]:
+    """Boards Simplify links to for listings that pass the radar's filters, most listings first.
+
+    Age is ignored and inactive listings count: a board that hosted relevant internships
+    before is likely to host the next ones. Excluded companies never match the filters.
+    """
+    posting_filter = PostingFilter(
+        settings.filters,
+        settings.locations,
+        settings.excluded_companies,
+        max_age=timedelta(days=3650),
+    )
+    now = datetime.now(UTC)
+    counts: Counter[tuple[Board, str]] = Counter()
+    names: dict[tuple[Board, str], Counter[str]] = defaultdict(Counter)
+    for posting in parse_listings(records, max_invalid_ratio=1.0).postings:
+        if not isinstance(
+            posting_filter.evaluate(posting.model_copy(update={"active": True}), now), Match
+        ):
+            continue
+        ref = parse_ats_url(str(posting.url))
+        if ref is None or not ref.slug or (str(ref.board), ref.slug) in known:
+            continue
+        counts[(ref.board, ref.slug)] += 1
+        names[(ref.board, ref.slug)][posting.company] += 1
+
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
+    return [
+        DiscoveryCandidate(board, slug, names[(board, slug)].most_common(1)[0][0], count)
+        for (board, slug), count in ranked
+    ]
+
+
+def discover(
+    candidates: list[DiscoveryCandidate], boards: BoardClient, limit: int
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Verify candidates in rank order until `limit` boards answer. Simplify linking to the
+    board is the evidence; the API call proves the board still exists."""
+    entries: list[dict[str, Any]] = []
+    skipped: Counter[str] = Counter()
+    for candidate in candidates:
+        if len(entries) >= limit:
+            break
+        try:
+            snapshot = boards.snapshot(candidate.board, candidate.slug)
+        except ProbeError:
+            skipped["probe_failed"] += 1
+            continue
+        if snapshot is None:
+            skipped["not_found"] += 1
+            continue
+        entries.append(
+            {
+                "name": candidate.company,
+                "group": DISCOVERED_GROUP,
+                "status": str(Status.VERIFIED),
+                "board": str(candidate.board),
+                "slug": candidate.slug,
+                "open_jobs": snapshot.open_jobs,
+                "evidence": ["simplify_url"],
+                "simplify_listings": candidate.listings,
+            }
+        )
+    return entries, skipped
+
+
+def read_watchlist(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("companies") or []
+
+
+def known_boards(entries: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """Boards already verified. Unproven `needs_review` candidates stay discoverable, since a
+    Simplify link is exactly the evidence they were missing."""
+    known = set()
+    for entry in entries:
+        if entry.get("status") != str(Status.VERIFIED):
+            continue
+        if entry.get("board") and entry.get("slug"):
+            known.add((entry["board"], entry["slug"]))
+        for other in entry.get("other_boards") or []:
+            known.add((other["board"], other["slug"]))
+    return known
+
+
+def write_watchlist(path: Path, entries: list[dict[str, Any]]) -> None:
     header = (
-        "# Generated by scripts/probe_boards.py. Do not edit by hand:\n"
-        "# change config/watchlist_seed.yaml and re-run the probe.\n"
+        "# Generated by scripts/probe_boards.py. Do not edit by hand: change\n"
+        "# config/watchlist_seed.yaml and re-run the probe, or re-run it with --discover.\n"
     )
     body = {
         "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
-        "companies": [result.to_yaml() for result in results],
+        "companies": entries,
     }
     path.write_text(header + yaml.safe_dump(body, sort_keys=False, width=100), encoding="utf-8")
+
+
+def _quiet_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def run_discovery(out: Path, limit: int) -> int:
+    settings = load_settings()
+    existing = read_watchlist(out)
+    kept = [entry for entry in existing if entry.get("group") != DISCOVERED_GROUP]
+    with make_client() as client:
+        try:
+            records = fetch_listings(client, settings.sources.simplify.url)
+        except SimplifyFeedError as exc:
+            log.error("cannot discover without the Simplify feed: %s", exc)
+            return 1
+        candidates = discovery_candidates(records, settings, known_boards(kept))
+        entries, skipped = discover(candidates, BoardClient(client), limit)
+
+    write_watchlist(out, kept + entries)
+    by_board = Counter(entry["board"] for entry in entries)
+    log.info("candidates=%d discovered=%d skipped[%s] by_board[%s]", len(candidates), len(entries),
+             ", ".join(f"{k}={v}" for k, v in sorted(skipped.items())),
+             ", ".join(f"{k}={v}" for k, v in sorted(by_board.items())))  # fmt: skip
+    for entry in entries[:15]:
+        log.info("  %-35s %s/%s listings=%d", entry["name"][:35], entry["board"], entry["slug"],
+                 entry["simplify_listings"])  # fmt: skip
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--seed", type=Path, default=DEFAULT_SEED)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--discover", action="store_true")
+    parser.add_argument("--max-discovered", type=int, default=DEFAULT_MAX_DISCOVERED)
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    for noisy in ("httpx", "httpcore"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    _quiet_logging()
+    if args.discover:
+        return run_discovery(args.out, args.max_discovered)
 
     settings = load_settings()
     companies = load_seed(args.seed, settings.excluded_companies)
@@ -368,7 +504,8 @@ def main(argv: list[str] | None = None) -> int:
             results.append(result)
             log.info("%-12s %-13s %s", company.name, result.status, _summary(result))
 
-    write_watchlist(args.out, results)
+    discovered = [e for e in read_watchlist(args.out) if e.get("group") == DISCOVERED_GROUP]
+    write_watchlist(args.out, [result.to_yaml() for result in results] + discovered)
     failed = sum(result.status is Status.PROBE_FAILED for result in results)
     log.info("wrote %s: %d companies, %d probe failures", args.out, len(results), failed)
     return 1 if failed else 0

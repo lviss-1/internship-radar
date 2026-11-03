@@ -9,6 +9,7 @@ delivery:
   heartbeat_hour: 8
   alert_cooldown_hours: 6
   board_down_after: 3
+  watchlist_max_age_days: 45
 
 thresholds:
   post: 60

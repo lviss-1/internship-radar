@@ -524,3 +524,35 @@ def test_board_down_alert_then_recovery_across_runs(
     assert "Recovered: Board greenhouse/a16z is responding again." in messages[2]
     assert "Recovered: Board polling is healthy again." in messages[2]
     assert store.load().lag.board_failures == {}
+
+
+def test_postings_handled_before_aliases_existed_are_not_reposted_from_boards(
+    settings: Settings, tmp_path: Path, raw_listings: list[dict[str, Any]]
+) -> None:
+    a16z_simplify = next(r for r in raw_listings if r["company_name"] == "Andreessen Horowitz")
+    store = FileStateStore(tmp_path)
+    store.persist(RadarState(posted={f"simplify:{a16z_simplify['id']}"}), "legacy, no aliases")
+    matches = RecordingHook()
+
+    with sources(raw_listings):
+        run_once(settings, store, matches, boards=[A16Z])
+
+    titles = [card["embeds"][0]["title"] for card in matches.cards()]
+    assert not any(title.startswith("Andreessen Horowitz") for title in titles)
+    assert f"greenhouse:{A16Z_JOB}" in store.load().posted
+
+
+def test_backfill_covers_both_buckets_and_reports_count() -> None:
+    state = RadarState(posted={"simplify:a"}, scored_below={"simplify:b"})
+
+    added = state.backfill_aliases(
+        [
+            ("simplify:a", frozenset({"simplify:a", "greenhouse:1"})),
+            ("simplify:b", frozenset({"simplify:b", "ashby:x"})),
+            ("simplify:c", frozenset({"simplify:c", "lever:y"})),
+        ]
+    )
+
+    assert added == 2
+    assert state.posted == {"simplify:a", "greenhouse:1"}
+    assert state.scored_below == {"simplify:b", "ashby:x"}

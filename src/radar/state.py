@@ -87,6 +87,20 @@ class RadarState:
     def handled(self, keys: Iterable[str]) -> bool:
         return any(key in self.posted or key in self.scored_below for key in keys)
 
+    def backfill_aliases(self, keys_by_posting: Iterable[tuple[str, frozenset[str]]]) -> int:
+        """Record board aliases for postings already handled under their own key.
+
+        Postings from before aliases were stored carry only their Simplify key; without
+        this, the employer board's copy of the same job would look new and post twice.
+        """
+        added = 0
+        for key, keys in keys_by_posting:
+            for bucket in (self.posted, self.scored_below):
+                if key in bucket and not keys <= bucket:
+                    added += len(keys - bucket)
+                    bucket |= keys
+        return added
+
 
 def _read_json(path: Path) -> object:
     try:

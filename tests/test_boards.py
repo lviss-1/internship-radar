@@ -123,7 +123,7 @@ def test_watchlist_takes_verified_and_evidenced_extra_boards(tmp_path: Path) -> 
         ],
     )
 
-    boards = load_watchlist(path, ["Palantir"])
+    boards = load_watchlist(path, ["Palantir"]).boards
 
     assert [board.key for board in boards] == [
         "greenhouse/duolingo",
@@ -132,7 +132,9 @@ def test_watchlist_takes_verified_and_evidenced_extra_boards(tmp_path: Path) -> 
 
 
 def test_real_watchlist_loads() -> None:
-    keys = {board.key for board in load_watchlist(ROOT / "config/watchlist.yaml", [])}
+    loaded = load_watchlist(ROOT / "config/watchlist.yaml", [])
+    keys = {board.key for board in loaded.boards}
+    assert loaded.generated_at is not None
 
     assert {"greenhouse/datadog", "greenhouse/duolingounirecruitment"} <= keys
 

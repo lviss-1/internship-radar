@@ -36,6 +36,7 @@ class DeliverySettings(StrictModel):
     heartbeat_hour: int = Field(ge=0, le=23)
     alert_cooldown_hours: float = Field(gt=0)
     board_down_after: int = Field(gt=0)
+    watchlist_max_age_days: int = Field(gt=0)
 
 
 class Thresholds(StrictModel):

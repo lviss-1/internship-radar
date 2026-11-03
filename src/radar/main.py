@@ -97,6 +97,7 @@ class RunSummary:
     board_postings: int = 0
     board_failures: dict[str, str] = field(default_factory=dict)
     boards_down: dict[str, int] = field(default_factory=dict)
+    watchlist_age_days: float | None = None
     lag_text: str = ""
     rejected: Counter[RejectReason] = field(default_factory=Counter)
     unscored: Counter[str] = field(default_factory=Counter)
@@ -339,8 +340,11 @@ def run(
     now: datetime,
     force_heartbeat: bool = False,
     boards: list[WatchlistBoard] | None = None,
+    watchlist_generated: datetime | None = None,
 ) -> RunSummary:
     summary = RunSummary()
+    if watchlist_generated is not None:
+        summary.watchlist_age_days = (now - watchlist_generated).total_seconds() / 86400
     state = store.load()
     writer = StateWriter(store, state)
     state.usage.roll(local_date(now, settings))
@@ -362,6 +366,9 @@ def run(
         summary.fetched, summary.invalid = feed.total, feed.invalid
         simplify_postings = feed.postings
         state.lag.first_polled.setdefault("simplify", now.isoformat())
+        backfilled = state.backfill_aliases((p.key, p.keys) for p in simplify_postings)
+        if backfilled:
+            log.info("backfilled %d board aliases for already-handled postings", backfilled)
 
     def wants(source: Source, title: str, posted_at: datetime, keys: frozenset[str]) -> bool:
         return posting_filter.worth_fetching(source, title, posted_at, now) and not state.handled(
@@ -549,6 +556,18 @@ def collect_alerts(summary: RunSummary, state: RadarState, settings: Settings) -
     if drafts:
         event("drafts_failed", f"{drafts.total()} drafts failed ({_counts(drafts)}).")
 
+    max_age = settings.delivery.watchlist_max_age_days
+    if summary.watchlist_age_days is not None and summary.watchlist_age_days > max_age:
+        alerts.append(
+            Alert(
+                f"watchlist_stale:{state.usage.month}",
+                AlertKind.ONCE,
+                f"The watchlist is {summary.watchlist_age_days:.0f} days old. Re-run "
+                "`uv run python scripts/probe_boards.py --discover` and commit "
+                "config/watchlist.yaml to pick up companies that started hiring.",
+            )
+        )
+
     usage, budget = state.usage, settings.budget
     if usage.month_usd >= budget.monthly_usd_target:
         alerts.append(
@@ -698,9 +717,17 @@ def execute(
             )
             ai = AiConfig(make_anthropic_client(settings.scoring), Resumes.from_env())
 
-        boards = load_watchlist(settings.watchlist_path, settings.excluded_companies)
+        watchlist = load_watchlist(settings.watchlist_path, settings.excluded_companies)
         summary = run(
-            settings, client, store, hooks, ai, now, force_heartbeat=args.heartbeat, boards=boards
+            settings,
+            client,
+            store,
+            hooks,
+            ai,
+            now,
+            force_heartbeat=args.heartbeat,
+            boards=watchlist.boards,
+            watchlist_generated=watchlist.generated_at,
         )
         log.info("run complete: %s", summary.describe())
 

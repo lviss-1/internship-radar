@@ -64,14 +64,21 @@ class _Company(_Lenient):
 
 
 class _Watchlist(_Lenient):
+    generated_at: datetime | None = None
     companies: list[_Company]
+
+
+@dataclass(frozen=True)
+class LoadedWatchlist:
+    boards: list[WatchlistBoard]
+    generated_at: datetime | None
 
 
 def _normalized(name: str) -> str:
     return " ".join(name.casefold().split())
 
 
-def load_watchlist(path: Path, excluded_companies: list[str]) -> list[WatchlistBoard]:
+def load_watchlist(path: Path, excluded_companies: list[str]) -> LoadedWatchlist:
     """Verified primary boards plus extra boards that carry their own evidence (campus boards).
 
     Boards the probe could only find, but not tie to the company, are never polled.
@@ -93,7 +100,7 @@ def load_watchlist(path: Path, excluded_companies: list[str]) -> list[WatchlistB
             for other in company.other_boards
             if other.evidence
         )
-    return boards
+    return LoadedWatchlist(boards, watchlist.generated_at)
 
 
 @dataclass

@@ -163,3 +163,97 @@ def test_excluded_companies_are_never_probed(tmp_path: Path) -> None:
     companies = probe.load_seed(seed, ["Palantir", "Anthropic"])
 
     assert [company.name for company in companies] == ["Figma"]
+
+
+def listing(company: str, url: str, **overrides: Any) -> dict[str, Any]:
+    record = {
+        "id": f"{company}-{url}",
+        "company_name": company,
+        "title": "Software Engineer Intern",
+        "url": url,
+        "locations": ["NYC"],
+        "terms": ["Summer 2027"],
+        "date_posted": 1700000000,
+        "active": False,
+        "is_visible": True,
+        "category": "Software",
+    }
+    record.update(overrides)
+    return record
+
+
+@pytest.fixture
+def settings() -> Any:
+    from radar.config import load_settings
+
+    return load_settings(ROOT / "config" / "settings.yaml")
+
+
+def test_discovery_ranks_by_matching_listings_and_skips_known(settings: Any) -> None:
+    records = [
+        listing("Zed", "https://jobs.lever.co/zed/0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8"),
+        listing("Acme", "https://job-boards.greenhouse.io/acme/jobs/1"),
+        listing("Acme", "https://job-boards.greenhouse.io/acme/jobs/2"),
+        listing("Known", "https://job-boards.greenhouse.io/known/jobs/3"),
+        listing("Toronto Co", "https://job-boards.greenhouse.io/torco/jobs/4",
+                locations=["Toronto, ON, Canada"]),
+        listing("Chipmaker", "https://job-boards.greenhouse.io/chips/jobs/5", category="Hardware"),
+        listing("Palantir", "https://jobs.lever.co/palantir/0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e9"),
+        listing("Workday Co", "https://acme.wd5.myworkdayjobs.com/Careers/job/1"),
+    ]  # fmt: skip
+
+    candidates = probe.discovery_candidates(records, settings, {("greenhouse", "known")})
+
+    assert [(c.board, c.slug, c.company, c.listings) for c in candidates] == [
+        ("greenhouse", "acme", "Acme", 2),
+        ("lever", "zed", "Zed", 1),
+    ]
+
+
+def test_discover_verifies_in_order_until_the_limit(api: Any) -> None:
+    candidates = [
+        probe.DiscoveryCandidate(probe.Board.GREENHOUSE, "gone", "Gone", 5),
+        probe.DiscoveryCandidate(probe.Board.GREENHOUSE, "seatgeek", "SeatGeek", 4),
+        probe.DiscoveryCandidate(probe.Board.ASHBY, "ramp", "Ramp", 3),
+        probe.DiscoveryCandidate(probe.Board.GREENHOUSE, "never", "Never", 1),
+    ]
+    api.get(f"{GREENHOUSE}/seatgeek").mock(
+        return_value=httpx.Response(200, json=fixture("greenhouse_board.json"))
+    )
+    api.get(f"{GREENHOUSE}/seatgeek/jobs").mock(
+        return_value=httpx.Response(200, json=fixture("greenhouse_jobs.json"))
+    )
+    api.get(f"{ASHBY}/ramp").mock(
+        return_value=httpx.Response(200, json=fixture("ashby_board.json"))
+    )
+    fallback_404(api)
+
+    with make_client() as client:
+        entries, skipped = probe.discover(
+            candidates, probe.BoardClient(client, sleep=lambda _: None), limit=2
+        )
+
+    assert [(e["board"], e["slug"], e["group"], e["evidence"]) for e in entries] == [
+        ("greenhouse", "seatgeek", "discovered", ["simplify_url"]),
+        ("ashby", "ramp", "discovered", ["simplify_url"]),
+    ]
+    assert skipped == {"not_found": 1}
+
+
+def test_seed_probe_and_discovery_keep_each_others_entries(tmp_path: Path) -> None:
+    out = tmp_path / "watchlist.yaml"
+    seed = {"name": "Figma", "group": "core", "status": "verified", "board": "greenhouse",
+            "slug": "figma"}  # fmt: skip
+    old = {"name": "Old", "group": "discovered", "status": "verified", "board": "ashby",
+           "slug": "old"}  # fmt: skip
+    probe.write_watchlist(out, [seed, old])
+
+    kept = [e for e in probe.read_watchlist(out) if e.get("group") != probe.DISCOVERED_GROUP]
+    discovered = [e for e in probe.read_watchlist(out) if e.get("group") == probe.DISCOVERED_GROUP]
+
+    assert kept == [seed]
+    assert discovered == [old]
+    assert probe.known_boards([seed, {"name": "L", "status": "needs_review",
+                                      "candidates": [{"board": "lever", "slug": "l"}]}]) == {
+        ("greenhouse", "figma")
+    }  # fmt: skip

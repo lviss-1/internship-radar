@@ -36,6 +36,7 @@ def _recovery_text(category: str) -> str:
     return RECOVERY_TEXT.get(prefix, f"{category} cleared.")
 
 
+MONTHLY_PREFIXES = ("budget_target:", "watchlist_stale:")
 CONDITION_PREFIXES = frozenset({"simplify_failed", "boards_failed", "board_down", "run_failed"})
 
 
@@ -74,12 +75,12 @@ def plan_alerts(
         if _is_condition(category):
             lines.append(f"Recovered: {_recovery_text(category)}")
             del sent[category]
-        elif not category.startswith("budget_target:") and (
+        elif not category.startswith(MONTHLY_PREFIXES) and (
             now - datetime.fromisoformat(sent[category]) >= cooldown
         ):
             del sent[category]
 
-    for category in [c for c in sent if c.startswith("budget_target:") and not c.endswith(month)]:
+    for category in [c for c in sent if c.startswith(MONTHLY_PREFIXES) and not c.endswith(month)]:
         del sent[category]
 
     return "\n".join(f"• {line}" for line in lines) if lines else None
