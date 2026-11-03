@@ -196,16 +196,20 @@
  "radar_minutes": {
   "simplify": [
    59.4,
-   42.5
+   42.5,
+   51.9
   ],
   "ashby": [
    14.8
   ],
   "greenhouse": [
-   10.1
+   10.1,
+   23.3
   ],
   "lever": [
-   1.4
+   1.4,
+   3.0,
+   2.0
   ]
  },
  "simplify_delay_minutes": [
