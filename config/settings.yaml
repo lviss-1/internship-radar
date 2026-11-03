@@ -7,6 +7,8 @@ delivery:
   max_post_age_hours: 72
   max_posts_per_run: 25
   heartbeat_hour: 8
+  alert_cooldown_hours: 6
+  board_down_after: 3
 
 thresholds:
   post: 60

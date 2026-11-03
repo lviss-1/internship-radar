@@ -38,6 +38,7 @@ class UsageLedger(BaseModel):
     day_calls: int = Field(default=0, ge=0)
     budget_alert_day: str = ""
     heartbeat_day: str = ""
+    alerts_sent: dict[str, str] = Field(default_factory=dict)
 
     def roll(self, today: date) -> None:
         """Reset counters when the month or day changed since the last run."""
@@ -60,6 +61,7 @@ class LagStats(BaseModel):
     radar_minutes: dict[str, list[float]] = Field(default_factory=dict)
     simplify_delay_minutes: list[float] = Field(default_factory=list)
     measured_pairs: list[str] = Field(default_factory=list)
+    board_failures: dict[str, int] = Field(default_factory=dict)
 
     def record_radar(self, source: str, minutes: float) -> None:
         samples = self.radar_minutes.setdefault(source, [])
@@ -145,15 +147,24 @@ def _write_atomic(path: Path, text: str) -> None:
         raise
 
 
-def save_state(directory: Path, state: RadarState) -> None:
+def serialize_state(state: RadarState) -> dict[str, str]:
+    """File name to file contents, exactly as written. Comparing two of these tells whether
+    anything changed since the last save."""
     seen = {
         "version": SEEN_VERSION,
         "posted": sorted(state.posted),
         "scored_below": sorted(state.scored_below),
     }
-    _write_atomic(directory / SEEN_FILENAME, json.dumps(seen, indent=1) + "\n")
-    _write_atomic(directory / USAGE_FILENAME, state.usage.model_dump_json(indent=1) + "\n")
-    _write_atomic(directory / LAG_FILENAME, state.lag.model_dump_json(indent=1) + "\n")
+    return {
+        SEEN_FILENAME: json.dumps(seen, indent=1) + "\n",
+        USAGE_FILENAME: state.usage.model_dump_json(indent=1) + "\n",
+        LAG_FILENAME: state.lag.model_dump_json(indent=1) + "\n",
+    }
+
+
+def save_state(directory: Path, state: RadarState) -> None:
+    for name, text in serialize_state(state).items():
+        _write_atomic(directory / name, text)
 
 
 class StateStore(Protocol):

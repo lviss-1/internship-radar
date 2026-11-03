@@ -15,7 +15,7 @@ import respx
 from radar.ats import Board
 from radar.config import Settings
 from radar.discord import DiscordError
-from radar.main import AiConfig, Hooks, RunSummary, problems_text, record_radar_lag, run
+from radar.main import AiConfig, Hooks, RunSummary, collect_alerts, record_radar_lag, run
 from radar.net import make_client
 from radar.sources.boards import WatchlistBoard
 from radar.state import (
@@ -274,8 +274,9 @@ def test_ids_are_reserved_before_anything_is_posted(
 
     run_once(settings, RecordingStore(tmp_path, events), RecordingHook(events=events))
 
+    sends = [i for i, event in enumerate(events) if event.startswith("send")]
     assert events[0] == "persist posted=6 below=1"
-    assert all(event.startswith("send") for event in events[1:])
+    assert sends and all(events[i].startswith("send") for i in range(sends[0], sends[-1] + 1))
 
 
 def test_failed_posts_are_released_and_retried_without_rescoring(
@@ -330,7 +331,9 @@ def test_budget_exhaustion_posts_unscored_and_alerts_once_per_day(
     assert claude.requests == []
     assert summary.posted == 7 and summary.unscored == {"budget": 7}
     assert all(card["flags"] != 0 for card in matches.cards())
-    assert len(errors.sent) == 1 and "monthly budget cap" in errors.sent[0]["content"]
+    assert len(errors.sent) == 1
+    assert "monthly budget cap" in errors.sent[0]["content"]
+    assert "past the $10.00 target" in errors.sent[0]["content"]
 
     store.persist(RadarState(usage=store.load().usage), "forget posts, keep alert day")
     run_once(settings, store, RecordingHook(), errors=errors, claude=claude)
@@ -454,7 +457,8 @@ def test_failing_board_is_reported_without_stopping_simplify(
     assert summary.posted == 6
     assert summary.board_failures == {"greenhouse/a16z": "HTTP 404"}
     assert summary.source_failed
-    assert "1 of 1 boards failed (greenhouse/a16z: HTTP 404)" in (problems_text(summary) or "")
+    messages = [alert.message for alert in collect_alerts(summary, RadarState(), settings)]
+    assert "1 of 1 boards failed this run (greenhouse/a16z: HTTP 404)." in messages
 
 
 def test_failing_simplify_feed_does_not_stop_boards(
@@ -468,7 +472,8 @@ def test_failing_simplify_feed_does_not_stop_boards(
     assert summary.simplify_failure is not None
     assert summary.source_failed
     assert [c["embeds"][0]["footer"]["text"] for c in matches.cards()] == ["greenhouse"]
-    assert "Simplify feed failed" in (problems_text(summary) or "")
+    categories = [alert.category for alert in collect_alerts(summary, RadarState(), settings)]
+    assert "simplify_failed" in categories
 
 
 def test_radar_lag_ignores_backlog_from_before_the_first_poll() -> None:
@@ -498,3 +503,24 @@ def make_board_posting(posted_at: datetime) -> Any:
     return make_posting(
         source="greenhouse", source_id="1", board="greenhouse/a16z", posted_at=posted_at
     )
+
+
+def test_board_down_alert_then_recovery_across_runs(
+    settings: Settings, tmp_path: Path, raw_listings: list[dict[str, Any]]
+) -> None:
+    store = FileStateStore(tmp_path)
+    errors = RecordingHook()
+
+    with sources(raw_listings, board=httpx.Response(404)):
+        for _ in range(3):
+            run_once(settings, store, RecordingHook(), errors=errors, boards=[A16Z])
+    with sources(raw_listings):
+        run_once(settings, store, RecordingHook(), errors=errors, boards=[A16Z])
+
+    messages = [payload["content"] for payload in errors.sent]
+    assert len(messages) == 3
+    assert "1 of 1 boards failed this run" in messages[0]
+    assert "Board greenhouse/a16z has failed 3 runs in a row (HTTP 404)" in messages[1]
+    assert "Recovered: Board greenhouse/a16z is responding again." in messages[2]
+    assert "Recovered: Board polling is healthy again." in messages[2]
+    assert store.load().lag.board_failures == {}

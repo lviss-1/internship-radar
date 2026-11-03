@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import anthropic
 import httpx
 
+from radar.alerts import Alert, AlertKind, plan_alerts
 from radar.config import DEFAULT_SETTINGS_PATH, ConfigError, Settings, load_settings
 from radar.delivery import Decision, Evaluation, decide
 from radar.discord import (
@@ -50,6 +51,7 @@ from radar.state import (
     RadarState,
     StateError,
     StateStore,
+    serialize_state,
 )
 
 log = logging.getLogger("radar")
@@ -59,6 +61,7 @@ ERRORS_ENV = "DISCORD_WEBHOOK_ERRORS"
 PING_USER_ENV = "DISCORD_PING_USER_ID"
 HEALTHCHECK_ENV = "HEALTHCHECK_PING_URL"
 CONSECUTIVE_FAILURE_LIMIT = 3
+DEFAULT_ALERT_COOLDOWN = timedelta(hours=6)
 BOARD_FAILURE_ALERT_RATIO = 0.25
 KNOWN_ERRORS = (
     ConfigError,
@@ -93,6 +96,7 @@ class RunSummary:
     boards_polled: int = 0
     board_postings: int = 0
     board_failures: dict[str, str] = field(default_factory=dict)
+    boards_down: dict[str, int] = field(default_factory=dict)
     lag_text: str = ""
     rejected: Counter[RejectReason] = field(default_factory=Counter)
     unscored: Counter[str] = field(default_factory=Counter)
@@ -220,10 +224,27 @@ def ping_user_from_env() -> str | None:
     return value
 
 
+class StateWriter:
+    """Saves state through the store, skipping saves when nothing changed since the last one,
+    so quiet runs make no commits on the state branch."""
+
+    def __init__(self, store: StateStore, state: RadarState) -> None:
+        self.state = state
+        self._store = store
+        self._saved = serialize_state(state)
+
+    def save(self, message: str) -> None:
+        self._store.persist(self.state, message)
+        self._saved = serialize_state(self.state)
+
+    def save_if_changed(self, message: str) -> None:
+        if serialize_state(self.state) != self._saved:
+            self.save(message)
+
+
 def post_evaluations(
     to_post: list[tuple[Evaluation, Decision]],
-    state: RadarState,
-    store: StateStore,
+    writer: StateWriter,
     hooks: Hooks,
     summary: RunSummary,
 ) -> None:
@@ -259,8 +280,8 @@ def post_evaluations(
 
     if failed:
         for posting in failed:
-            state.posted -= posting.keys
-        store.persist(state, f"release {len(failed)} failed postings")
+            writer.state.posted -= posting.keys
+        writer.save(f"release {len(failed)} failed postings")
     summary.failed = len(failed)
 
 
@@ -321,7 +342,7 @@ def run(
 ) -> RunSummary:
     summary = RunSummary()
     state = store.load()
-    lag_before = state.lag.model_dump_json()
+    writer = StateWriter(store, state)
     state.usage.roll(local_date(now, settings))
     posting_filter = PostingFilter(
         settings.filters,
@@ -359,6 +380,9 @@ def run(
         state.lag.first_polled.setdefault(board_key, now.isoformat())
     for board_key, reason in sorted(board_result.failures.items()):
         log.warning("board %s failed: %s", board_key, reason)
+    summary.boards_down = track_board_health(
+        state.lag.board_failures, boards or [], board_result, settings.delivery.board_down_after
+    )
 
     postings = merge_sources(
         board_result.postings, simplify_postings, board_result.published, state.lag
@@ -413,23 +437,24 @@ def run(
     if batch:
         for evaluation, _ in to_post:
             state.posted |= evaluation.match.posting.keys
-        store.persist(
-            state,
-            f"reserve {len(to_post)} postings, {summary.below_threshold} below threshold",
-        )
-        post_evaluations(to_post, state, store, hooks, summary)
-    elif summary.heartbeat_due or state.lag.model_dump_json() != lag_before:
-        store.persist(state, "record heartbeat and lag")
+        writer.save(f"reserve {len(to_post)} postings, {summary.below_threshold} below threshold")
+        post_evaluations(to_post, writer, hooks, summary)
 
     summary.state_size = len(state.posted)
     summary.month_usd = state.usage.month_usd
+    alerts = collect_alerts(summary, state, settings)
     if alert_budget:
-        report_error(
-            hooks.errors,
-            f"{summary.budget_note}. New matches post unscored until it resets "
-            f"(month to date ${state.usage.month_usd:.2f} of "
-            f"${settings.budget.monthly_usd_hard_cap:.2f}).",
+        alerts.append(
+            Alert(
+                f"budget_cap:{state.usage.day}",
+                AlertKind.ONCE,
+                f"{summary.budget_note}. New matches post unscored until it resets "
+                f"(month to date ${state.usage.month_usd:.2f} of "
+                f"${settings.budget.monthly_usd_hard_cap:.2f}).",
+            )
         )
+    send_alerts(alerts, state, hooks.errors, now, settings)
+    writer.save_if_changed("record alerts, heartbeat and lag")
     return summary
 
 
@@ -465,29 +490,120 @@ def ping_healthcheck(client: httpx.Client, succeeded: bool) -> None:
         log.warning("healthcheck ping returned HTTP %d", response.status_code)
 
 
-def problems_text(summary: RunSummary) -> str | None:
-    unscored = {reason: n for reason, n in summary.unscored.items() if reason != "budget"}
-    drafts = {reason: n for reason, n in summary.draft_failures.items() if reason != "budget"}
-    parts = []
+def track_board_health(
+    failures: dict[str, int],
+    boards: list[WatchlistBoard],
+    result: BoardResult,
+    down_after: int,
+) -> dict[str, int]:
+    """Count consecutive failed polls per board and return the boards now considered down.
+
+    One failure is usually a blip; several in a row usually means the company moved to a
+    different job system, which only re-running the probe script fixes.
+    """
+    watched = {board.key for board in boards}
+    for key in [key for key in failures if key not in watched]:
+        del failures[key]
+    for key in result.polled:
+        failures.pop(key, None)
+    for key in result.failures:
+        failures[key] = failures.get(key, 0) + 1
+    return {key: count for key, count in sorted(failures.items()) if count >= down_after}
+
+
+def _counts(counter: Counter[str]) -> str:
+    return ", ".join(f"{reason}={n}" for reason, n in sorted(counter.items()))
+
+
+def collect_alerts(summary: RunSummary, state: RadarState, settings: Settings) -> list[Alert]:
+    def condition(category: str, message: str) -> None:
+        alerts.append(Alert(category, AlertKind.CONDITION, message))
+
+    def event(category: str, message: str) -> None:
+        alerts.append(Alert(category, AlertKind.EVENT, message))
+
+    alerts: list[Alert] = []
     if summary.simplify_failure:
-        parts.append(f"Simplify feed failed ({summary.simplify_failure})")
+        condition("simplify_failed", f"Simplify feed failed ({summary.simplify_failure}).")
     if summary.boards_alarming:
-        detail = ", ".join(
-            f"{key}: {reason}" for key, reason in sorted(summary.board_failures.items())
-        )
-        parts.append(
-            f"{len(summary.board_failures)} of {summary.boards_total} boards failed ({detail})"
+        detail = ", ".join(f"{key}: {why}" for key, why in sorted(summary.board_failures.items()))
+        failed = f"{len(summary.board_failures)} of {summary.boards_total}"
+        condition("boards_failed", f"{failed} boards failed this run ({detail}).")
+    for board_key, count in summary.boards_down.items():
+        why = summary.board_failures.get(board_key, "unknown")
+        condition(
+            f"board_down:{board_key}",
+            f"Board {board_key} has failed {count} runs in a row ({why}). The company may "
+            "have changed job systems; re-run scripts/probe_boards.py.",
         )
     if summary.failed:
-        parts.append(f"{summary.failed} postings failed to send and will retry next run")
+        event("post_failed", f"{summary.failed} postings failed to send; they retry next run.")
+    unscored = Counter({why: n for why, n in summary.unscored.items() if why != "budget"})
     if unscored:
-        detail = ", ".join(f"{reason}={n}" for reason, n in sorted(unscored.items()))
-        parts.append(f"{sum(unscored.values())} postings could not be scored ({detail}) "
-                     "and were posted unscored")  # fmt: skip
+        event(
+            "unscored",
+            f"{unscored.total()} postings could not be scored ({_counts(unscored)}) "
+            "and were posted unscored.",
+        )
+    drafts = Counter({why: n for why, n in summary.draft_failures.items() if why != "budget"})
     if drafts:
-        detail = ", ".join(f"{reason}={n}" for reason, n in sorted(drafts.items()))
-        parts.append(f"{sum(drafts.values())} drafts failed ({detail})")
-    return "; ".join(parts) + "." if parts else None
+        event("drafts_failed", f"{drafts.total()} drafts failed ({_counts(drafts)}).")
+
+    usage, budget = state.usage, settings.budget
+    if usage.month_usd >= budget.monthly_usd_target:
+        alerts.append(
+            Alert(
+                f"budget_target:{usage.month}",
+                AlertKind.ONCE,
+                f"API spend reached ${usage.month_usd:.2f} this month, past the "
+                f"${budget.monthly_usd_target:.2f} target "
+                f"(hard cap ${budget.monthly_usd_hard_cap:.2f}).",
+            )
+        )
+    return alerts
+
+
+def send_alerts(
+    alerts: list[Alert],
+    state: RadarState,
+    hook: DiscordWebhook,
+    now: datetime,
+    settings: Settings,
+) -> None:
+    """Post what's due and record it, but only record if the post went through, so a
+    Discord hiccup doesn't silence an alert for the whole cooldown."""
+    before = dict(state.usage.alerts_sent)
+    cooldown = timedelta(hours=settings.delivery.alert_cooldown_hours)
+    message = plan_alerts(alerts, state.usage.alerts_sent, now, cooldown, state.usage.month)
+    if message and not report_error(hook, message):
+        state.usage.alerts_sent = before
+
+
+def alert_run_failure(
+    store: StateStore,
+    hook: DiscordWebhook | None,
+    message: str,
+    now: datetime,
+    cooldown: timedelta,
+) -> None:
+    """Report a crashed run at most once per cooldown. If state itself can't be read or
+    saved, report every time; the healthcheck /fail ping is the backstop either way."""
+    try:
+        state = store.load()
+    except Exception:
+        report_error(hook, f"Run failed: {message}")
+        return
+    last = state.usage.alerts_sent.get("run_failed")
+    if last is not None and now - datetime.fromisoformat(last) < cooldown:
+        log.info("run failure already reported within the cooldown")
+        return
+    if not report_error(hook, f"Run failed: {message}"):
+        return
+    state.usage.alerts_sent["run_failed"] = now.isoformat()
+    try:
+        store.persist(state, "record alert")
+    except Exception:
+        log.warning("could not record the run-failure alert")
 
 
 def heartbeat_text(summary: RunSummary, now: datetime, settings: Settings) -> str:
@@ -499,17 +615,27 @@ def heartbeat_text(summary: RunSummary, now: datetime, settings: Settings) -> st
         f"API spend this month: ${summary.month_usd:.2f} of "
         f"${settings.budget.monthly_usd_hard_cap:.2f}. "
         f"Boards polled: {summary.boards_polled} of {summary.boards_total}. "
+        f"{down_boards_text(summary)}"
         f"Detection lag: {summary.lag_text}."
     )
 
 
-def report_error(hook: DiscordWebhook | None, message: str) -> None:
+def down_boards_text(summary: RunSummary) -> str:
+    if not summary.boards_down:
+        return ""
+    return f"Boards down: {', '.join(summary.boards_down)}. "
+
+
+def report_error(hook: DiscordWebhook | None, message: str) -> bool:
+    """Post to the errors channel. Returns whether the post went through."""
     if hook is None:
-        return
+        return False
     try:
-        hook.send(text_payload(f"Internship Radar error: {message}", silent=False))
+        hook.send(text_payload(f"**Internship Radar alert**\n{message}", silent=False))
     except DiscordError as exc:
         log.error("could not report to errors channel: %s", exc)
+        return False
+    return True
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -558,8 +684,10 @@ def execute(
 ) -> int:
     errors_hook: DiscordWebhook | None = None
     ai: AiConfig | None = None
+    cooldown = DEFAULT_ALERT_COOLDOWN
     try:
         settings = load_settings(args.settings)
+        cooldown = timedelta(hours=settings.delivery.alert_cooldown_hours)
         hooks: Hooks | None = None
         if not args.dry_run:
             errors_hook = webhook_from_env(client, ERRORS_ENV)
@@ -576,9 +704,6 @@ def execute(
         )
         log.info("run complete: %s", summary.describe())
 
-        problems = problems_text(summary)
-        if problems:
-            report_error(errors_hook, problems)
         if summary.heartbeat_due and errors_hook is not None:
             try:
                 errors_hook.send(text_payload(heartbeat_text(summary, now, settings)))
@@ -588,7 +713,8 @@ def execute(
     except Exception as exc:
         message = describe_exception(exc)
         log.error("run failed: %s", message)
-        report_error(errors_hook, message)
+        if errors_hook is not None:
+            alert_run_failure(store, errors_hook, message, now, cooldown)
         return 1
     finally:
         if ai is not None:
