@@ -211,7 +211,13 @@
    39.8,
    38.1,
    36.2,
-   36.1
+   36.1,
+   395.3,
+   66.1,
+   60.8,
+   58.1,
+   55.3,
+   50.1
   ],
   "ashby": [
    14.8
@@ -238,8 +244,6 @@
   ]
  },
  "simplify_delay_minutes": [
-  39062.1,
-  10780.6,
   40424.8,
   38238.8,
   40406.6,
@@ -437,6 +441,8 @@
   -1313.4,
   -1389.9,
   266.7,
+  0.0,
+  0.0,
   0.0
  ],
  "measured_pairs": [
@@ -1008,7 +1014,9 @@
   "simplify:7db50e65-0053-42be-8c35-aacdbe477410",
   "simplify:e3da5b7c-56c9-4040-b6c6-b563a93f1664",
   "simplify:3095dc51-647e-45c6-8c95-5791bcf93583",
-  "simplify:bace5e25-f7c7-40db-875f-96e30740cd4b"
+  "simplify:bace5e25-f7c7-40db-875f-96e30740cd4b",
+  "simplify:dcfba2c3-b23c-4366-87fb-2ebe7cc01be3",
+  "simplify:7a1a3528-b508-452b-8181-fd07f84905ef"
  ],
  "board_failures": {}
 }
