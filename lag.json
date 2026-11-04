@@ -200,7 +200,18 @@
    51.9,
    149.0,
    40.8,
-   37.5
+   37.5,
+   418.5,
+   385.7,
+   236.1,
+   163.5,
+   163.2,
+   88.7,
+   53.0,
+   39.8,
+   38.1,
+   36.2,
+   36.1
   ],
   "ashby": [
    14.8
@@ -227,8 +238,6 @@
   ]
  },
  "simplify_delay_minutes": [
-  40405.1,
-  40423.1,
   39062.1,
   10780.6,
   40424.8,
@@ -426,7 +435,9 @@
   0.0,
   0.0,
   -1313.4,
-  -1389.9
+  -1389.9,
+  266.7,
+  0.0
  ],
  "measured_pairs": [
   "simplify:3f12b8ac-a406-4397-9458-ea07e6d144b3",
@@ -995,9 +1006,9 @@
   "simplify:1deda976-5920-4586-8a2e-b904ee4d0863",
   "simplify:276857c3-5c43-48d5-a26f-cdf148f72a7d",
   "simplify:7db50e65-0053-42be-8c35-aacdbe477410",
-  "simplify:e3da5b7c-56c9-4040-b6c6-b563a93f1664"
+  "simplify:e3da5b7c-56c9-4040-b6c6-b563a93f1664",
+  "simplify:3095dc51-647e-45c6-8c95-5791bcf93583",
+  "simplify:bace5e25-f7c7-40db-875f-96e30740cd4b"
  ],
- "board_failures": {
-  "greenhouse/andurilindustries": 1
- }
+ "board_failures": {}
 }
