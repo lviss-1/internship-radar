@@ -231,7 +231,8 @@
   ],
   "ashby": [
    14.8,
-   21.1
+   21.1,
+   1.6
   ],
   "greenhouse": [
    10.1,
@@ -263,7 +264,6 @@
   ]
  },
  "simplify_delay_minutes": [
-  38238.8,
   40406.6,
   694.8,
   41153.9,
@@ -462,7 +462,8 @@
   0.0,
   0.0,
   0.0,
-  -159.4
+  -159.4,
+  -50034.8
  ],
  "measured_pairs": [
   "simplify:3f12b8ac-a406-4397-9458-ea07e6d144b3",
@@ -1036,7 +1037,8 @@
   "simplify:bace5e25-f7c7-40db-875f-96e30740cd4b",
   "simplify:dcfba2c3-b23c-4366-87fb-2ebe7cc01be3",
   "simplify:7a1a3528-b508-452b-8181-fd07f84905ef",
-  "simplify:79477bc2-76a3-4678-90ed-8684e8e45c02"
+  "simplify:79477bc2-76a3-4678-90ed-8684e8e45c02",
+  "simplify:365794f9-57cb-460f-a01a-ff545f9d0cc9"
  ],
  "board_failures": {}
 }
