@@ -223,7 +223,11 @@
    960.5,
    960.5,
    960.5,
-   45.5
+   45.5,
+   990.5,
+   990.5,
+   990.5,
+   52.8
   ],
   "ashby": [
    14.8,
@@ -251,7 +255,8 @@
    3.0,
    2.0,
    1.5,
-   20.2
+   20.2,
+   3.4
   ]
  },
  "simplify_delay_minutes": [
@@ -1030,7 +1035,5 @@
   "simplify:7a1a3528-b508-452b-8181-fd07f84905ef",
   "simplify:79477bc2-76a3-4678-90ed-8684e8e45c02"
  ],
- "board_failures": {
-  "greenhouse/andurilindustries": 1
- }
+ "board_failures": {}
 }
