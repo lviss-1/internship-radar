@@ -298,7 +298,8 @@
   "ashby": [
    14.8,
    21.1,
-   1.6
+   1.6,
+   57.8
   ],
   "greenhouse": [
    10.1,
@@ -1128,7 +1129,5 @@
   "simplify:60ae9031-138a-419b-bd54-f4237a95f0ea",
   "simplify:3bb4fff0-d717-4d88-8569-a649bc5534b3"
  ],
- "board_failures": {
-  "greenhouse/andurilindustries": 1
- }
+ "board_failures": {}
 }
