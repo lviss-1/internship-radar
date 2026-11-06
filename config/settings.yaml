@@ -27,10 +27,10 @@ models:
   strong: claude-sonnet-5-5
 
 scoring:
-  max_description_chars: 15000
-  # Drop EEO/legal notice lines before scoring. Off until scripts/eval_scoring.py shows
-  # scores hold; see README.
-  strip_boilerplate: false
+  max_description_chars: 8000
+  # Drop EEO/legal notice lines before scoring. Stripping plus the 8000-char cap matched the
+  # noise floor in the 2026-11-06 eval (30 postings) and cut scoring cost about 17%.
+  strip_boilerplate: true
   score_effort: medium
   score_max_tokens: 8000
   draft_effort: medium

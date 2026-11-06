@@ -78,17 +78,27 @@ class VariantRun:
 
 
 def variants(settings: Settings, candidate_chars: int) -> list[Variant]:
+    """Production, its repeat, then each candidate that differs from production."""
     scoring = settings.scoring
-    production = Variant("production", False, scoring.max_description_chars, scoring.score_effort)
+    production = Variant(
+        "production", scoring.strip_boilerplate, scoring.max_description_chars, scoring.score_effort
+    )
     trimmed = min(candidate_chars, scoring.max_description_chars)
+    candidates = [
+        Variant("strip", True, production.max_chars, production.effort),
+        Variant(f"strip+{trimmed}", True, trimmed, production.effort),
+        Variant(f"strip+{trimmed}+low", True, trimmed, "low"),
+    ]
+    tried = {(production.strip, production.max_chars, production.effort)}
     result = [
         production,
         Variant("repeat", production.strip, production.max_chars, production.effort),
-        Variant("strip", True, production.max_chars, production.effort),
-        Variant(f"strip+{trimmed}", True, trimmed, production.effort),
     ]
-    if production.effort != "low":
-        result.append(Variant(f"strip+{trimmed}+low", True, trimmed, "low"))
+    for candidate in candidates:
+        setting = (candidate.strip, candidate.max_chars, candidate.effort)
+        if setting not in tried:
+            tried.add(setting)
+            result.append(candidate)
     return result
 
 

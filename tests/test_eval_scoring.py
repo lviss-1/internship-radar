@@ -68,8 +68,16 @@ def test_within_noise_allows_a_small_margin_below_the_floor() -> None:
     assert not evaluation.within_noise(worse, floor)
 
 
+def with_scoring(settings: Settings, **changes: object) -> Settings:
+    return settings.model_copy(update={"scoring": settings.scoring.model_copy(update=changes)})
+
+
 def test_variants_start_with_production_and_its_repeat(settings: Settings) -> None:
-    plan = evaluation.variants(settings, 8000)
+    unstripped = with_scoring(
+        settings, strip_boilerplate=False, max_description_chars=15000, score_effort="medium"
+    )
+
+    plan = evaluation.variants(unstripped, 8000)
 
     assert [v.name for v in plan] == [
         "production", "repeat", "strip", "strip+8000", "strip+8000+low",
@@ -80,6 +88,17 @@ def test_variants_start_with_production_and_its_repeat(settings: Settings) -> No
         repeat.strip, repeat.max_chars, repeat.effort,
     )  # fmt: skip
     assert plan[-1].effort == "low"
+
+
+def test_variants_skip_candidates_identical_to_production(settings: Settings) -> None:
+    stripped = with_scoring(
+        settings, strip_boilerplate=True, max_description_chars=8000, score_effort="medium"
+    )
+
+    plan = evaluation.variants(stripped, 8000)
+
+    assert [v.name for v in plan] == ["production", "repeat", "strip+8000+low"]
+    assert (plan[0].strip, plan[0].max_chars, plan[0].effort) == (True, 8000, "medium")
 
 
 def test_variant_prepare_strips_then_truncates() -> None:
