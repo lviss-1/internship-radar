@@ -1,10 +1,20 @@
 {
  "version": 1,
  "month": "2026-11",
- "month_usd": 0.287274,
- "month_by_kind": {},
+ "month_usd": 0.28811,
+ "month_by_kind": {
+  "score": {
+   "calls": 1,
+   "metered_calls": 1,
+   "usd": 0.000836,
+   "input_tokens": 1139,
+   "output_tokens": 265,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 4718
+  }
+ },
  "day": "2026-11-06",
- "day_calls": 0,
+ "day_calls": 1,
  "budget_alert_day": "",
  "heartbeat_day": "2026-11-05",
  "alerts_sent": {}
