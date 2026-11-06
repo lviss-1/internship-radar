@@ -28,6 +28,7 @@ class Decision:
     silent: bool = True
     ping: bool = False
     tags: tuple[str, ...] = ()
+    draftable: bool = False
 
 
 def in_quiet_hours(now: datetime, quiet: QuietHours) -> bool:
@@ -44,6 +45,8 @@ def decide(
 
     Unscored matches still post, silently, so a scoring outage never hides a posting.
     Out-of-area roles stay silent unless relocation is mentioned, even at a high score.
+    Drafts are offered on request for high scores, except out-of-area roles without
+    relocation, which are not worth applying to.
     """
     match = evaluation.match
     tags = [tag for tag in match.tags if tag is not Tag.RELOCATION_UNKNOWN or not evaluation.score]
@@ -59,6 +62,13 @@ def decide(
     needs_relocation = match.location_kind is LocationKind.OTHER_US
     if needs_relocation:
         tags.append(RELOCATION_MENTIONED if score.relocation_mentioned else NO_RELOCATION)
-    silent = (needs_relocation and not score.relocation_mentioned) or in_quiet_hours(now, quiet)
-    ping = score.score >= thresholds.ping and not silent
-    return Decision(post=True, silent=silent, ping=ping, tags=tuple(tags))
+    relocation_blocked = needs_relocation and not score.relocation_mentioned
+    silent = relocation_blocked or in_quiet_hours(now, quiet)
+    high = score.score >= thresholds.ping
+    return Decision(
+        post=True,
+        silent=silent,
+        ping=high and not silent,
+        tags=tuple(tags),
+        draftable=high and not relocation_blocked,
+    )

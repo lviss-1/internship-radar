@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from radar.config import BudgetSettings, ConfigError, ModelPrice, ScoringSettings
 from radar.feedback import Feedback
 from radar.normalize import Posting
-from radar.state import UsageLedger
+from radar.state import CallKind, TokenCounts, UsageLedger
 
 RESUME_ENV = {"swe": "RESUME_SWE_TEXT", "pm": "RESUME_PM_TEXT"}
 _DELIMITER_TAGS = re.compile(
@@ -113,14 +113,22 @@ class BudgetExhausted(Exception):
     pass
 
 
+def token_counts(usage: Any) -> TokenCounts:
+    return TokenCounts(
+        input=usage.input_tokens,
+        output=usage.output_tokens,
+        cache_read=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        cache_write=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+    )
+
+
 def cost_usd(price: ModelPrice, usage: Any) -> float:
-    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    tokens = token_counts(usage)
     total = (
-        usage.input_tokens * price.input
-        + cache_read * price.cache_read
-        + cache_write * price.cache_write
-        + usage.output_tokens * price.output
+        tokens.input * price.input
+        + tokens.cache_read * price.cache_read
+        + tokens.cache_write * price.cache_write
+        + tokens.output * price.output
     )
     return total / 1_000_000
 
@@ -155,10 +163,13 @@ class Budget:
         if projected > self._settings.monthly_usd_hard_cap:
             raise BudgetExhausted("monthly budget cap reached")
 
-    def record(self, model: str, usage: Any | None, fallback_usd: float = 0.0) -> None:
+    def record(
+        self, model: str, kind: CallKind, usage: Any | None, fallback_usd: float = 0.0
+    ) -> None:
         price = self._pricing.get(model)
         usd = cost_usd(price, usage) if price is not None and usage is not None else fallback_usd
-        self.ledger.record(usd)
+        tokens = token_counts(usage) if usage is not None else None
+        self.ledger.record(usd, kind, tokens)
 
 
 def strip_delimiters(text: str) -> str:
@@ -186,6 +197,7 @@ def posting_block(posting: Posting, description: str | None) -> str:
 def call_parsed[T: BaseModel](
     budget: Budget,
     model: str,
+    kind: CallKind,
     max_tokens: int,
     send: Any,
     output_format: type[T],
@@ -198,25 +210,25 @@ def call_parsed[T: BaseModel](
     try:
         message = send()
     except ValidationError as exc:
-        budget.record(model, None, fallback_usd=budget.worst_case_usd(model, max_tokens))
+        budget.record(model, kind, None, fallback_usd=budget.worst_case_usd(model, max_tokens))
         raise ModelCallFailed("invalid_output") from exc
     except (TypeError, KeyError, AttributeError) as exc:
-        budget.record(model, None, fallback_usd=budget.worst_case_usd(model, max_tokens))
+        budget.record(model, kind, None, fallback_usd=budget.worst_case_usd(model, max_tokens))
         raise ModelCallFailed("invalid_response") from exc
     except anthropic.RateLimitError as exc:
-        budget.record(model, None)
+        budget.record(model, kind, None)
         raise ModelCallFailed("rate_limited") from exc
     except anthropic.APIStatusError as exc:
-        budget.record(model, None)
+        budget.record(model, kind, None)
         raise ModelCallFailed(f"api_http_{exc.status_code}") from exc
     except anthropic.APIConnectionError as exc:
-        budget.record(model, None)
+        budget.record(model, kind, None)
         raise ModelCallFailed("api_unreachable") from exc
     except anthropic.AnthropicError as exc:
-        budget.record(model, None)
+        budget.record(model, kind, None)
         raise ModelCallFailed("api_error") from exc
 
-    budget.record(model, message.usage)
+    budget.record(model, kind, message.usage)
     if message.stop_reason == "refusal":
         raise ModelCallFailed("refused")
     if message.stop_reason == "max_tokens":
@@ -292,5 +304,5 @@ class Scorer:
             )
 
         return call_parsed(
-            self._budget, self._model, self._settings.score_max_tokens, send, ScoreResult
+            self._budget, self._model, "score", self._settings.score_max_tokens, send, ScoreResult
         )

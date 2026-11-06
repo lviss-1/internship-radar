@@ -37,6 +37,7 @@ class DeliverySettings(StrictModel):
     alert_cooldown_hours: float = Field(gt=0)
     board_down_after: int = Field(gt=0)
     watchlist_max_age_days: int = Field(gt=0)
+    max_drafts_per_run: int = Field(gt=0)
 
 
 class Thresholds(StrictModel):
@@ -60,6 +61,7 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 class ScoringSettings(StrictModel):
     max_description_chars: int = Field(gt=0)
+    strip_boilerplate: bool
     score_effort: Effort
     score_max_tokens: int = Field(gt=0)
     draft_effort: Effort

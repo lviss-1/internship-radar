@@ -14,6 +14,7 @@ from radar.drafts import (
     keep_grounded_edits,
 )
 from radar.scoring import ScoreResult
+from radar.state import UsageLedger
 from tests.conftest import SWE_RESUME, FakeClaude, anthropic_fixture, make_budget, make_posting
 
 SCORE = ScoreResult(
@@ -113,3 +114,18 @@ def test_drafter_uses_strong_model_with_fallback_and_filters_edits(settings: Set
 
 def test_draft_prompt_covers_co_ops_and_apprenticeships() -> None:
     assert "internship, co-op or apprenticeship" in DRAFT_INSTRUCTIONS
+
+
+def test_drafter_records_spend_as_draft(settings: Settings) -> None:
+    ledger = UsageLedger()
+    fake = FakeClaude(
+        lambda body: httpx2.Response(200, json=anthropic_fixture("drafts_message.json"))
+    )
+    budget = make_budget(settings, ledger)
+    drafter = Drafter(fake.client, settings.models.strong, settings.scoring, budget)
+
+    drafter.draft(make_posting(), "desc", SCORE, SWE_RESUME)
+
+    assert list(ledger.month_by_kind) == ["draft"]
+    assert ledger.month_by_kind["draft"].calls == 1
+    assert ledger.month_by_kind["draft"].usd == pytest.approx(ledger.month_usd)

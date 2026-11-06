@@ -21,10 +21,11 @@ from radar.main import (
     heartbeat_is_due,
     main,
     ping_healthcheck,
+    spend_report,
 )
 from radar.net import make_client
 from radar.scoring import RESUME_ENV
-from radar.state import FileStateStore, RadarState, StateError, UsageLedger
+from radar.state import FileStateStore, RadarState, StateError, TokenCounts, UsageLedger
 from tests.conftest import (
     FEED_URL,
     NOW,
@@ -216,7 +217,7 @@ def test_full_run_through_main(
         if not json.loads(call.request.content)["embeds"][0]["title"].startswith("Drafts: ")
     ]
     assert code == 0
-    assert footers.count("greenhouse") == 1
+    assert footers.count("greenhouse · ref greenhouse:8046730003") == 1
     assert "greenhouse:8046730003" in state.posted
     assert ping.call_count == 1
     assert errors.call_count == 1
@@ -290,3 +291,23 @@ def test_check_feedback_without_token_fails(
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
 
     assert main(["--check-feedback"]) == 1
+
+
+def test_spend_report_without_calls() -> None:
+    assert spend_report(UsageLedger()) == "no model calls yet"
+
+
+def test_spend_report_averages_metered_calls_and_shows_untracked_spend() -> None:
+    usage = UsageLedger(month_usd=0.28)
+    usage.record(0.001, "score", TokenCounts(input=1000, output=800, cache_read=3000))
+    usage.record(0.003, "score", TokenCounts(input=3000, output=1200, cache_read=1000))
+    usage.record(0.05, "score", None)
+    usage.record(0.04, "draft", TokenCounts(input=5000, output=3000, cache_write=1000))
+
+    report = spend_report(usage)
+
+    assert report == (
+        "draft $0.04 over 1 calls, avg 6000 in (0% cache read) / 3000 out tokens; "
+        "score $0.05 over 3 calls, avg 4000 in (50% cache read) / 1000 out tokens; "
+        "$0.28 from before per-kind tracking"
+    )

@@ -72,6 +72,37 @@ def html_to_text(markup: str) -> str:
     return extractor.text()
 
 
+_BOILERPLATE = re.compile(
+    r"equal (?:employment )?opportunity|\beeo\b|affirmative action|without regard to"
+    r"|protected (?:veteran|characteristic|class|status)|reasonable accommodation"
+    r"|e-verify|fair chance|(?:arrest|conviction) records?|pay transparency"
+    r"|privacy (?:policy|notice)|know your rights|unsolicited (?:resumes|applications)"
+    r"|recruitment (?:agencies|fraud)",
+    re.IGNORECASE,
+)
+_ELIGIBILITY = re.compile(
+    r"relocat|housing|sponsor|security clearance|clearance (?:is )?required|itar"
+    r"|export control|authorized to work|work authori[sz]ation|u\.?s\.? citizens? (?:only|required)"
+    r"|must be a u\.?s\.? citizen|citizenship (?:is )?required",
+    re.IGNORECASE,
+)
+
+
+def strip_boilerplate(text: str) -> str:
+    """Drop legal boilerplate lines (EEO, accommodation, privacy and similar notices).
+
+    These lines don't help score a posting but are often a quarter of a description. A
+    line that mentions relocation, sponsorship, clearance or work authorization is always
+    kept, since the scorer reports those.
+    """
+    kept = [
+        line
+        for line in text.splitlines()
+        if not _BOILERPLATE.search(line) or _ELIGIBILITY.search(line)
+    ]
+    return "\n".join(kept)
+
+
 def truncate_description(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text

@@ -119,6 +119,14 @@ def test_usage_is_recorded_at_configured_prices(settings: Settings) -> None:
     expected = (1200 * 0.10 + 2400 * 0.01 + 400 * 0.50) / 1_000_000
     assert ledger.day_calls == 1
     assert ledger.month_usd == pytest.approx(expected)
+    totals = ledger.month_by_kind["score"]
+    assert (totals.calls, totals.metered_calls) == (1, 1)
+    assert totals.usd == pytest.approx(expected, abs=1e-6)
+    assert (totals.input_tokens, totals.cache_read_tokens, totals.cache_write_tokens) == (
+        1200, 2400, 0,
+    )  # fmt: skip
+    assert totals.output_tokens == 400
+    assert "draft" not in ledger.month_by_kind
 
 
 def test_refusal_is_a_failure_not_a_score(settings: Settings) -> None:
@@ -142,6 +150,8 @@ def test_out_of_range_output_is_rejected_and_charged_worst_case(settings: Settin
     assert ledger.month_usd == pytest.approx(
         make_budget(settings).worst_case_usd("claude-haiku-5-5", settings.scoring.score_max_tokens)
     )
+    totals = ledger.month_by_kind["score"]
+    assert (totals.calls, totals.metered_calls, totals.output_tokens) == (1, 0, 0)
 
 
 def test_truncated_output_is_a_failure(settings: Settings) -> None:

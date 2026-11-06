@@ -29,6 +29,8 @@ NOW = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
 CHANNEL = "555"
 MESSAGES = f"{DISCORD_API}/channels/{CHANNEL}/messages"
 CONFIG = FeedbackConfig(bot_token="bot-secret-token", webhook_url=WEBHOOK_URL)
+WEBHOOK_ID = "123"
+WEBHOOK_DETAILS = {"channel_id": CHANNEL, "id": WEBHOOK_ID}
 
 
 def card(
@@ -39,24 +41,31 @@ def card(
     down: int = 0,
     age_days: float = 1,
     message_id: str = "1",
+    draft: int = 0,
+    webhook_id: str | None = WEBHOOK_ID,
 ) -> dict[str, Any]:
     reactions = []
+    if draft:
+        reactions.append({"emoji": {"name": "\N{WRITING HAND}\ufe0f"}, "count": draft})
     if up:
         reactions.append({"emoji": {"name": "\N{THUMBS UP SIGN}"}, "count": up, "me": False})
     if down:
         reactions.append({"emoji": {"name": "\N{THUMBS DOWN SIGN}"}, "count": down, "me": False})
-    return {
+    message = {
         "id": message_id,
         "timestamp": (NOW - timedelta(days=age_days)).isoformat(),
         "embeds": [{"title": title, "fields": [{"name": "Score", "value": score}]}],
         "reactions": reactions,
     }
+    if webhook_id:
+        message["webhook_id"] = webhook_id
+    return message
 
 
 def read(messages: list[dict[str, Any]] | list[list[dict[str, Any]]]) -> Feedback:
     pages = messages if messages and isinstance(messages[0], list) else [messages]
     with respx.mock() as mock, make_client() as client:
-        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json={"channel_id": CHANNEL}))
+        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json=WEBHOOK_DETAILS))
         mock.get(MESSAGES).mock(side_effect=[httpx.Response(200, json=page) for page in pages])
         return read_feedback(client, CONFIG, NOW)
 
@@ -116,7 +125,7 @@ def test_pages_backwards_until_a_short_page() -> None:
     last = [card("Last — Intern", down=1, message_id="5")]
 
     with respx.mock() as mock, make_client() as client:
-        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json={"channel_id": CHANNEL}))
+        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json=WEBHOOK_DETAILS))
         route = mock.get(MESSAGES).mock(
             side_effect=[httpx.Response(200, json=full), httpx.Response(200, json=last)]
         )
@@ -143,7 +152,7 @@ def test_empty_channel_is_not_an_error() -> None:
 @pytest.mark.parametrize("status", [401, 403])
 def test_permission_errors_explain_the_fix_without_leaking_the_token(status: int) -> None:
     with respx.mock() as mock, make_client() as client:
-        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json={"channel_id": CHANNEL}))
+        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json=WEBHOOK_DETAILS))
         mock.get(MESSAGES).mock(return_value=httpx.Response(status))
         with pytest.raises(FeedbackError) as error:
             read_feedback(client, CONFIG, NOW)
@@ -183,3 +192,40 @@ def test_scorer_prompt_includes_examples_only_when_present(settings: Any) -> Non
     assert "<feedback_examples>" in with_examples
     assert "<feedback_examples>" not in system_text(Feedback())
     assert "<feedback_examples>" not in system_text(None)
+
+
+def test_draft_reactions_on_own_posts_are_collected_oldest_first() -> None:
+    feedback = read(
+        [
+            card("New — Intern", draft=1, message_id="3"),
+            card("Mid — Intern", draft=1, up=1, message_id="2"),
+            card("Old — Intern", draft=1, message_id="1"),
+        ]
+    )
+
+    assert [embed["title"] for embed in feedback.draft_cards] == [
+        "Old — Intern", "Mid — Intern", "New — Intern",
+    ]  # fmt: skip
+    assert [example.title for example in feedback.liked] == ["Mid — Intern"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        card("Acme — SWE Intern", draft=1, webhook_id=None),
+        card("Acme — SWE Intern", draft=1, webhook_id="999"),
+        card("Drafts: Acme — SWE Intern", draft=1),
+        card("Acme — SWE Intern", up=1),
+    ],
+)
+def test_draft_reactions_elsewhere_are_ignored(message: dict[str, Any]) -> None:
+    assert read([message]).draft_cards == []
+
+
+def test_draft_reactions_need_the_webhook_id_to_verify_authorship() -> None:
+    with respx.mock() as mock, make_client() as client:
+        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json={"channel_id": CHANNEL}))
+        mock.get(MESSAGES).mock(return_value=httpx.Response(200, json=[card("A — B", draft=1)]))
+        feedback = read_feedback(client, CONFIG, NOW)
+
+    assert feedback.draft_cards == []

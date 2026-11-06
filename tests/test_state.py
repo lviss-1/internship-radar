@@ -25,9 +25,11 @@ from radar.state import (
     USAGE_FILENAME,
     FileStateStore,
     GitStateStore,
+    KindUsage,
     LagStats,
     RadarState,
     StateError,
+    TokenCounts,
     UsageLedger,
     load_seen,
 )
@@ -136,6 +138,10 @@ def run_once(
         )
 
 
+def offers_drafts(card: dict[str, Any]) -> bool:
+    return any(item["name"] == "Drafts" for item in card["embeds"][0]["fields"])
+
+
 def card_titles(hook: RecordingHook) -> list[str]:
     return [payload["embeds"][0]["title"] for payload in hook.cards()]
 
@@ -149,20 +155,30 @@ def test_missing_state_is_a_first_run(tmp_path: Path) -> None:
 def test_version_1_state_migrates(tmp_path: Path) -> None:
     (tmp_path / SEEN_FILENAME).write_text(json.dumps({"version": 1, "ids": ["simplify:a"]}))
 
-    assert load_seen(tmp_path / SEEN_FILENAME) == ({"simplify:a"}, set())
+    assert load_seen(tmp_path / SEEN_FILENAME) == ({"simplify:a"}, set(), set())
+
+
+def test_version_2_state_migrates(tmp_path: Path) -> None:
+    payload = {"version": 2, "posted": ["simplify:a"], "scored_below": ["simplify:b"]}
+    (tmp_path / SEEN_FILENAME).write_text(json.dumps(payload))
+
+    assert load_seen(tmp_path / SEEN_FILENAME) == ({"simplify:a"}, {"simplify:b"}, set())
 
 
 def test_round_trip_holds_ids_and_numbers_only(tmp_path: Path) -> None:
     store = FileStateStore(tmp_path)
     usage = UsageLedger(month="2026-11", month_usd=1.25, day="2026-11-02", day_calls=3)
-    store.persist(RadarState({"simplify:b", "simplify:a"}, {"simplify:c"}, usage), "save")
+    state = RadarState({"simplify:b", "simplify:a"}, {"simplify:c"}, usage, drafted={"simplify:a"})
+    store.persist(state, "save")
 
     seen = json.loads((tmp_path / SEEN_FILENAME).read_text())
     assert seen == {
-        "version": 2,
+        "version": 3,
         "posted": ["simplify:a", "simplify:b"],
         "scored_below": ["simplify:c"],
+        "drafted": ["simplify:a"],
     }
+    assert store.load().drafted == {"simplify:a"}
     assert store.load().usage == usage
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         LAG_FILENAME,
@@ -193,6 +209,40 @@ def test_corrupt_usage_raises(tmp_path: Path) -> None:
 
     with pytest.raises(StateError):
         FileStateStore(tmp_path).load()
+
+
+def test_usage_from_before_per_kind_tracking_still_loads(tmp_path: Path) -> None:
+    old = {"version": 1, "month": "2026-11", "month_usd": 0.28, "day": "2026-11-05"}
+    (tmp_path / USAGE_FILENAME).write_text(json.dumps(old))
+
+    usage = FileStateStore(tmp_path).load().usage
+
+    assert (usage.month_usd, usage.month_by_kind) == (0.28, {})
+
+
+def test_per_kind_usage_round_trips(tmp_path: Path) -> None:
+    store = FileStateStore(tmp_path)
+    usage = UsageLedger(month="2026-11", day="2026-11-05")
+    usage.record(0.002, "score", TokenCounts(input=900, output=300, cache_read=2400))
+    usage.record(0.04, "draft", None)
+    store.persist(RadarState(usage=usage), "save")
+
+    loaded = store.load().usage
+
+    assert loaded == usage
+    assert loaded.month_by_kind["draft"] == KindUsage(calls=1, usd=0.04)
+    assert loaded.month_usd == pytest.approx(0.042)
+
+
+def test_month_roll_clears_per_kind_usage() -> None:
+    ledger = UsageLedger(month="2026-10", day="2026-10-31")
+    ledger.record(0.5, "draft", TokenCounts(input=1, output=1))
+
+    ledger.roll(date(2026, 10, 31))
+    assert "draft" in ledger.month_by_kind
+
+    ledger.roll(date(2026, 11, 1))
+    assert ledger.month_by_kind == {}
 
 
 def test_ledger_resets_on_new_day_and_month() -> None:
@@ -231,14 +281,15 @@ def test_scored_pipeline_posts_and_records_correctly(
     assert cards["KnowBe4"].get("content") == "<@42>"
     assert "content" not in cards["Nokia"] and cards["Nokia"]["flags"] != 0
     assert cards["Entrust"]["embeds"][0]["fields"][0]["value"] == "Unscored (refused)"
-    assert len(drafts) == 2
+    assert drafts == []
+    assert not any(offers_drafts(card) for card in cards.values()), "no bot, so no draft offers"
     assert own_keys(state.scored_below) == 1 and own_keys(state.posted) == 6
     assert {key for key in state.posted if key.startswith("greenhouse:")}
-    assert (summary.scored, summary.drafted, summary.dropped_edits) == (6, 2, 2)
+    assert (summary.scored, summary.drafted, summary.dropped_edits) == (6, 0, 0)
     assert summary.unscored == {"refused": 1}
-    assert state.usage.day_calls == 9
+    assert state.usage.day_calls == 7
     assert state.usage.month_usd > 0
-    assert len([r for r in claude.requests if r["model"] == "claude-sonnet-5-5"]) == 2
+    assert [r for r in claude.requests if r["model"] == "claude-sonnet-5-5"] == []
 
 
 def test_three_consecutive_runs_never_rescore_or_repost(
@@ -254,7 +305,7 @@ def test_three_consecutive_runs_never_rescore_or_repost(
     assert [s.posted for s in summaries] == [6, 0, 0]
     assert summaries[1].already_handled == summaries[2].already_handled == 7
     assert len(titles) == len(set(titles)) == 6
-    assert len(claude.requests) == 9
+    assert len(claude.requests) == 7
 
 
 def test_cap_defers_the_rest_without_duplicates(
@@ -448,7 +499,7 @@ def test_board_copy_wins_and_simplify_copy_never_posts(
     a16z_cards = [c for c in first.cards() if c["embeds"][0]["title"].startswith("Andreessen")]
     state = store.load()
     assert len(a16z_cards) == 1
-    assert a16z_cards[0]["embeds"][0]["footer"]["text"] == "greenhouse"
+    assert a16z_cards[0]["embeds"][0]["footer"]["text"] == "greenhouse · ref greenhouse:8046730003"
     assert f"greenhouse:{A16Z_JOB}" in state.posted
     assert len(first.cards()) == 6 and second.cards() == []
     assert state.lag.simplify_delay_minutes == [180.0]
@@ -478,7 +529,9 @@ def test_failing_simplify_feed_does_not_stop_boards(
 
     assert summary.simplify_failure is not None
     assert summary.source_failed
-    assert [c["embeds"][0]["footer"]["text"] for c in matches.cards()] == ["greenhouse"]
+    assert [c["embeds"][0]["footer"]["text"] for c in matches.cards()] == [
+        "greenhouse · ref greenhouse:8046730003"
+    ]
     categories = [alert.category for alert in collect_alerts(summary, RadarState(), settings)]
     assert "simplify_failed" in categories
 

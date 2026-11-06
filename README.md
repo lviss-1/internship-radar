@@ -11,7 +11,7 @@ Every ~30 minutes a GitHub Actions run:
 3. **Filters** for free: intern-level titles, Spring/Summer/Fall 2027, location (NYC area, NJ, CT in person; US remote; other US states only if relocation is offered), and drops non-US, quant finance and hardware roles.
 4. **Dedupes** against IDs already handled, stored on the `state` branch.
 5. **Scores** each new match with Claude Haiku (strict JSON, validated with pydantic): which resume fits, a 0-100 score, reasons, gaps, relocation and eligibility flags. Recent 👍/👎 reactions on match posts are given to the scorer as calibration examples (read from Discord each run, never stored in the repo).
-6. **Drafts** resume edits, a cover note and a referral message with Claude Sonnet for scores of 80+. Any suggested edit that doesn't quote a real line of the resume is dropped.
+6. **Drafts on request** resume edits, a cover note and a referral message with Claude Sonnet: cards scoring 80+ say "React ✍️ for drafts", and the next run posts them for the cards you reacted to (needs the bot below; at most `delivery.max_drafts_per_run` per run). Any suggested edit that doesn't quote a real line of the resume is dropped. Drafted posting IDs are recorded in state so a reaction is drafted once.
 7. **Delivers** to Discord: 60+ posts, 80+ also mentions the owner (silently during quiet hours, 01:00-07:00 ET). Lower scores are recorded by ID only.
 
 Problems go to a separate errors channel, at most once per 6 hours per problem, with a "recovered" note when they clear. A heartbeat posts once a day after 08:00 ET with spend and detection-lag numbers.
@@ -39,7 +39,7 @@ Add with `gh secret set NAME` (values are never committed or logged):
 | `ANTHROPIC_API_KEY` | Claude API key |
 | `RESUME_SWE_TEXT`, `RESUME_PM_TEXT` | Plain-text resumes (`gh secret set RESUME_SWE_TEXT < swe.txt`) |
 | `HEALTHCHECK_PING_URL` | healthchecks.io ping URL (optional but recommended) |
-| `DISCORD_BOT_TOKEN` | Read-only bot that reads 👍/👎 reactions for scoring feedback (optional) |
+| `DISCORD_BOT_TOKEN` | Read-only bot that reads 👍/👎 reactions for scoring feedback and ✍️ draft requests (optional; without it there are no drafts) |
 
 ### Triggering (cron-job.org)
 
@@ -56,7 +56,7 @@ Create a check with period **30 min** and grace **90 min**, add the Discord inte
 
 ### Reaction feedback (Discord bot, optional)
 
-React 👍 or 👎 on match posts; each run reads the last 60 days of reactions and shows the scorer up to 10 liked and 10 disliked roles as examples.
+React 👍 or 👎 on match posts; each run reads the last 60 days of reactions and shows the scorer up to 10 liked and 10 disliked roles as examples. React ✍️ on a card that offers drafts to get them on the next run; only cards posted by the radar's own webhook count.
 
 1. In the Discord Developer Portal, create an application, open **Bot**, and turn on **Message Content Intent** (the radar needs it to read the post titles).
 2. Under **OAuth2 → URL Generator**, pick scope `bot` and permissions **View Channel** and **Read Message History** only. Open the URL and add the bot to the server; make sure it can see the matches channel.
@@ -76,10 +76,11 @@ If the bot can't read the channel or the embeds come back empty, scoring continu
 | Next season | Point `sources.simplify.url` at the new SimplifyJobs repo and update `filters.seasons` |
 | Pause the radar | Disable the cron-job.org job (and the workflow: `gh workflow disable radar.yml`) |
 | Try it locally | `uv run radar --dry-run` fetches and filters without calling Claude, posting or writing state |
+| Test a scoring change before making it | `gh workflow run eval.yml` (inputs: `sample`, `chars`, `budget_usd`). It scores one live sample under production settings, a repeat of them (the noise floor), boilerplate stripping, a shorter description cap, and low effort, then logs threshold agreement and tokens per variant. Turn on `scoring.strip_boilerplate`, lower `max_description_chars` or set `score_effort: low` only for a variant marked OK. Costs well under $1, outside the radar's ledger |
 
 ## Costs and safeguards
 
-- Scoring costs about $0.001 per posting and drafts about $0.04 each; a typical month is estimated at a few dollars.
+- Scoring costs about $0.001 per posting and drafts about $0.04 each (estimates); drafts are made only when requested. The heartbeat and run log show month-to-date spend split by call kind, with average tokens per call and the cache-read share.
 - Every Claude call is checked against a daily call cap and a **$15 monthly hard cap** before it is made (assuming the call's worst case). A warning posts when spend passes **$10**. At the cap, new matches post unscored and silent until the month resets.
 - The ledger is an estimate from configured prices. Also set a monthly spend limit in the Anthropic Console as a backstop.
 - Actions logs are public, so runs log counts and posting IDs only: never resume text, job descriptions or model output.

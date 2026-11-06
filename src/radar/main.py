@@ -5,9 +5,10 @@ import statistics
 import sys
 import traceback
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -19,13 +20,14 @@ from radar.delivery import Decision, Evaluation, decide
 from radar.discord import (
     DiscordError,
     DiscordWebhook,
+    card_request,
     drafts_payload,
     score_card_payload,
     text_payload,
 )
 from radar.drafts import Drafter
 from radar.feedback import Feedback, FeedbackConfig, FeedbackError, read_feedback
-from radar.filters import LocationKind, Match, PostingFilter, RejectReason
+from radar.filters import Match, PostingFilter, RejectReason
 from radar.net import NetworkError, make_client, request_with_retries
 from radar.normalize import Posting, Source
 from radar.scoring import (
@@ -43,7 +45,7 @@ from radar.sources.boards import (
     WatchlistError,
     load_watchlist,
 )
-from radar.sources.descriptions import Description, DescriptionFetcher
+from radar.sources.descriptions import Description, DescriptionFetcher, strip_boilerplate
 from radar.sources.simplify import SimplifyFeedError, load_postings
 from radar.state import (
     FileStateStore,
@@ -52,6 +54,7 @@ from radar.state import (
     RadarState,
     StateError,
     StateStore,
+    UsageLedger,
     serialize_state,
 )
 
@@ -65,6 +68,7 @@ BOT_ENV = "DISCORD_BOT_TOKEN"
 CONSECUTIVE_FAILURE_LIMIT = 3
 DEFAULT_ALERT_COOLDOWN = timedelta(hours=6)
 BOARD_FAILURE_ALERT_RATIO = 0.25
+TRANSIENT_MODEL_FAILURES = frozenset({"rate_limited", "api_unreachable", "api_error"})
 KNOWN_ERRORS = (
     ConfigError,
     SimplifyFeedError,
@@ -85,12 +89,15 @@ class RunSummary:
     descriptions_found: int = 0
     scored: int = 0
     below_threshold: int = 0
+    draft_requests: int = 0
+    drafts_deferred: int = 0
     drafted: int = 0
     dropped_edits: int = 0
     posted: int = 0
     failed: int = 0
     state_size: int = 0
     month_usd: float = 0.0
+    spend_text: str = ""
     budget_note: str | None = None
     heartbeat_due: bool = False
     simplify_failure: str | None = None
@@ -118,9 +125,11 @@ class RunSummary:
             f"matched={self.matched} "
             f"already_handled={self.already_handled} deferred={self.deferred} "
             f"descriptions={self.descriptions_found} scored={self.scored} "
-            f"below_threshold={self.below_threshold} drafted={self.drafted} "
+            f"below_threshold={self.below_threshold} draft_requests={self.draft_requests} "
+            f"drafts_deferred={self.drafts_deferred} drafted={self.drafted} "
             f"dropped_edits={self.dropped_edits} posted={self.posted} failed={self.failed} "
             f"state_size={self.state_size} month_usd={self.month_usd:.4f} "
+            f"spend[{self.spend_text}] "
             f"unscored[{counts(self.unscored)}] draft_failures[{counts(self.draft_failures)}] "
             f"rejected[{counts(self.rejected)}] lag[{self.lag_text}] "
             f"feedback liked={self.feedback_liked} disliked={self.feedback_disliked}"
@@ -152,7 +161,7 @@ class AiConfig:
 
 
 class Evaluator:
-    """Fetches the description, scores the posting and drafts for high scores."""
+    """Fetches descriptions, scores new postings and drafts for cards someone asked about."""
 
     def __init__(
         self,
@@ -170,6 +179,11 @@ class Evaluator:
         )
         self._drafter = Drafter(ai.client, settings.models.strong, settings.scoring, budget)
 
+    def _model_input(self, description: str | None) -> str | None:
+        if description and self._settings.scoring.strip_boilerplate:
+            return strip_boilerplate(description)
+        return description
+
     def evaluate(self, match: Match, summary: RunSummary) -> Evaluation:
         posting = match.posting
         description = (
@@ -179,7 +193,7 @@ class Evaluator:
         )
         summary.descriptions_found += description.found
         try:
-            score = self._scorer.score(posting, description.text)
+            score = self._scorer.score(posting, self._model_input(description.text))
         except BudgetExhausted as exc:
             summary.budget_note = str(exc)
             summary.unscored["budget"] += 1
@@ -188,26 +202,22 @@ class Evaluator:
             summary.unscored[exc.reason] += 1
             return Evaluation(match, description.found, unscored_reason=exc.reason)
         summary.scored += 1
+        return Evaluation(match, description.found, score=score)
 
-        relocation_blocked = (
-            match.location_kind is LocationKind.OTHER_US and not score.relocation_mentioned
+    def draft(self, request: Evaluation) -> tuple[Evaluation, int]:
+        """Draft for a card rebuilt by `card_request`. Raises BudgetExhausted and
+        ModelCallFailed for the caller to handle."""
+        if request.score is None:
+            raise ValueError("draft requests always carry a score")
+        posting = request.match.posting
+        description = self._fetcher.fetch(str(posting.url))
+        drafts, dropped = self._drafter.draft(
+            posting,
+            self._model_input(description.text),
+            request.score,
+            self._resumes.get(request.score.resume),
         )
-        if score.score < self._settings.thresholds.ping or relocation_blocked:
-            return Evaluation(match, description.found, score=score)
-        try:
-            drafts, dropped = self._drafter.draft(
-                posting, description.text, score, self._resumes.get(score.resume)
-            )
-        except BudgetExhausted as exc:
-            summary.budget_note = str(exc)
-            summary.draft_failures["budget"] += 1
-            return Evaluation(match, description.found, score=score)
-        except ModelCallFailed as exc:
-            summary.draft_failures[exc.reason] += 1
-            return Evaluation(match, description.found, score=score)
-        summary.drafted += 1
-        summary.dropped_edits += dropped
-        return Evaluation(match, description.found, score=score, drafts=drafts)
+        return replace(request, description_found=description.found, drafts=drafts), dropped
 
 
 def describe_exception(exc: BaseException) -> str:
@@ -250,11 +260,12 @@ def check_feedback(client: httpx.Client, now: datetime) -> int:
         log.error("feedback check failed: %s", exc)
         return 1
     log.info(
-        "feedback check ok: messages=%d with_embeds=%d liked=%d disliked=%d",
+        "feedback check ok: messages=%d with_embeds=%d liked=%d disliked=%d draft_reactions=%d",
         feedback.messages_seen,
         feedback.with_embeds,
         len(feedback.liked),
         len(feedback.disliked),
+        len(feedback.draft_cards),
     )
     return 0
 
@@ -344,6 +355,73 @@ def post_evaluations(
             writer.state.posted -= posting.keys
         writer.save(f"release {len(failed)} failed postings")
     summary.failed = len(failed)
+
+
+def is_transient(reason: str) -> bool:
+    return reason in TRANSIENT_MODEL_FAILURES or reason.startswith("api_http_5")
+
+
+def pending_draft_requests(cards: list[dict[str, Any]], state: RadarState) -> list[Evaluation]:
+    """Rebuild each reacted card once, skipping cards that never offered drafts and postings
+    already drafted."""
+    requests: list[Evaluation] = []
+    keys: set[str] = set()
+    for card in cards:
+        request = card_request(card)
+        if request is None:
+            continue
+        key = request.match.posting.key
+        if key not in state.drafted and key not in keys:
+            keys.add(key)
+            requests.append(request)
+    return requests
+
+
+def fulfil_draft_requests(
+    requests: list[Evaluation],
+    evaluator: Evaluator,
+    writer: StateWriter,
+    hooks: Hooks,
+    summary: RunSummary,
+    limit: int,
+) -> None:
+    """Draft for cards someone reacted to, oldest first, at most `limit` per run.
+
+    The key is reserved in state before the drafts post, so a re-run never posts them twice.
+    A failure that would only repeat (a refusal, invalid output) is reserved too, so one bad
+    card can't be charged for again every half hour; transient failures retry next run.
+    """
+    summary.draft_requests = len(requests)
+    summary.drafts_deferred = max(0, len(requests) - limit)
+    for request in requests[:limit]:
+        key = request.match.posting.key
+        try:
+            evaluation, dropped = evaluator.draft(request)
+        except BudgetExhausted as exc:
+            summary.budget_note = str(exc)
+            summary.draft_failures["budget"] += 1
+            return
+        except ModelCallFailed as exc:
+            summary.draft_failures[exc.reason] += 1
+            log.warning("drafting failed for %s: %s", key, exc.reason)
+            if not is_transient(exc.reason):
+                writer.state.drafted.add(key)
+                writer.save("give up drafting 1 posting")
+            continue
+
+        writer.state.drafted.add(key)
+        writer.save("reserve drafts for 1 posting")
+        try:
+            hooks.matches.send(drafts_payload(evaluation))
+        except DiscordError as exc:
+            writer.state.drafted.discard(key)
+            writer.save("release 1 failed draft post")
+            summary.draft_failures["discord"] += 1
+            log.warning("drafts post failed for %s: %s", key, exc)
+            continue
+        summary.drafted += 1
+        summary.dropped_edits += dropped
+        log.info("drafted %s", key)
 
 
 def merge_sources(
@@ -472,6 +550,7 @@ def run(
             log.info("dry run: would evaluate %s", match.posting.key)
         summary.state_size = len(state.posted)
         summary.month_usd = state.usage.month_usd
+        summary.spend_text = spend_report(state.usage)
         return summary
 
     budget = Budget(
@@ -480,13 +559,15 @@ def run(
         settings.pricing,
         settings.scoring.worst_case_input_tokens,
     )
-    feedback = load_feedback(client, hooks.feedback, now, summary) if batch else None
+    feedback = load_feedback(client, hooks.feedback, now, summary)
     evaluator = Evaluator(settings, client, ai, budget, feedback)
     to_post: list[tuple[Evaluation, Decision]] = []
     for match in batch:
         record_radar_lag(match.posting, state.lag, now)
         evaluation = evaluator.evaluate(match, summary)
         decision = decide(evaluation, settings.thresholds, settings.quiet_hours, now)
+        if hooks.feedback is None:
+            decision = replace(decision, draftable=False)
         if decision.post:
             to_post.append((evaluation, decision))
         else:
@@ -508,8 +589,19 @@ def run(
         writer.save(f"reserve {len(to_post)} postings, {summary.below_threshold} below threshold")
         post_evaluations(to_post, writer, hooks, summary)
 
+    if feedback is not None:
+        fulfil_draft_requests(
+            pending_draft_requests(feedback.draft_cards, state),
+            evaluator,
+            writer,
+            hooks,
+            summary,
+            settings.delivery.max_drafts_per_run,
+        )
+
     summary.state_size = len(state.posted)
     summary.month_usd = state.usage.month_usd
+    summary.spend_text = spend_report(state.usage)
     alerts = collect_alerts(summary, state, settings)
     if alert_budget:
         alerts.append(
@@ -524,6 +616,25 @@ def run(
     send_alerts(alerts, state, hooks.errors, now, settings)
     writer.save_if_changed("record alerts, heartbeat and lag")
     return summary
+
+
+def spend_report(usage: UsageLedger) -> str:
+    """Month-to-date spend per call kind with average tokens per call. Counts only."""
+    parts = []
+    for kind, totals in sorted(usage.month_by_kind.items()):
+        part = f"{kind} ${totals.usd:.2f} over {totals.calls} calls"
+        if totals.metered_calls:
+            prompt = totals.input_tokens + totals.cache_read_tokens + totals.cache_write_tokens
+            cached = round(100 * totals.cache_read_tokens / prompt) if prompt else 0
+            part += (
+                f", avg {prompt // totals.metered_calls} in ({cached}% cache read)"
+                f" / {totals.output_tokens // totals.metered_calls} out tokens"
+            )
+        parts.append(part)
+    untracked = usage.month_usd - sum(totals.usd for totals in usage.month_by_kind.values())
+    if untracked >= 0.005:
+        parts.append(f"${untracked:.2f} from before per-kind tracking")
+    return "; ".join(parts) or "no model calls yet"
 
 
 def local_date(now: datetime, settings: Settings) -> date:
@@ -697,7 +808,7 @@ def heartbeat_text(summary: RunSummary, now: datetime, settings: Settings) -> st
         f"This run fetched {summary.fetched} listings, {summary.matched} passed filters, "
         f"{summary.posted} new posted. {summary.state_size} postings delivered so far. "
         f"API spend this month: ${summary.month_usd:.2f} of "
-        f"${settings.budget.monthly_usd_hard_cap:.2f}. "
+        f"${settings.budget.monthly_usd_hard_cap:.2f} ({summary.spend_text}). "
         f"Boards polled: {summary.boards_polled} of {summary.boards_total}. "
         f"{down_boards_text(summary)}"
         f"Detection lag: {summary.lag_text}."

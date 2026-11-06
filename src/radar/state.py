@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 log = logging.getLogger(__name__)
 
-SEEN_VERSION = 2
+SEEN_VERSION = 3
 SEEN_FILENAME = "seen.json"
 USAGE_FILENAME = "usage.json"
 LAG_FILENAME = "lag.json"
@@ -28,12 +28,48 @@ class StateError(Exception):
     pass
 
 
+CallKind = Literal["score", "draft"]
+
+
+@dataclass(frozen=True)
+class TokenCounts:
+    input: int = 0
+    output: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+
+
+class KindUsage(BaseModel):
+    """Month-to-date totals for one kind of model call. `metered_calls` counts calls that
+    returned token usage; failed calls add to `calls` and `usd` only."""
+
+    calls: int = Field(default=0, ge=0)
+    metered_calls: int = Field(default=0, ge=0)
+    usd: float = Field(default=0.0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
+
+    def add(self, usd: float, tokens: TokenCounts | None) -> None:
+        self.calls += 1
+        self.usd = round(self.usd + usd, 6)
+        if tokens is None:
+            return
+        self.metered_calls += 1
+        self.input_tokens += tokens.input
+        self.output_tokens += tokens.output
+        self.cache_read_tokens += tokens.cache_read
+        self.cache_write_tokens += tokens.cache_write
+
+
 class UsageLedger(BaseModel):
     """Month-to-date API spend and today's call count. Numbers only, safe for a public repo."""
 
     version: Literal[1] = 1
     month: str = ""
     month_usd: float = Field(default=0.0, ge=0)
+    month_by_kind: dict[CallKind, KindUsage] = Field(default_factory=dict)
     day: str = ""
     day_calls: int = Field(default=0, ge=0)
     budget_alert_day: str = ""
@@ -45,12 +81,14 @@ class UsageLedger(BaseModel):
         month = today.strftime("%Y-%m")
         if self.month != month:
             self.month, self.month_usd = month, 0.0
+            self.month_by_kind.clear()
         if self.day != today.isoformat():
             self.day, self.day_calls = today.isoformat(), 0
 
-    def record(self, usd: float) -> None:
+    def record(self, usd: float, kind: CallKind, tokens: TokenCounts | None = None) -> None:
         self.month_usd = round(self.month_usd + usd, 6)
         self.day_calls += 1
+        self.month_by_kind.setdefault(kind, KindUsage()).add(usd, tokens)
 
 
 class LagStats(BaseModel):
@@ -83,6 +121,7 @@ class RadarState:
     scored_below: set[str] = field(default_factory=set)
     usage: UsageLedger = field(default_factory=UsageLedger)
     lag: LagStats = field(default_factory=LagStats)
+    drafted: set[str] = field(default_factory=set)
 
     def handled(self, keys: Iterable[str]) -> bool:
         return any(key in self.posted or key in self.scored_below for key in keys)
@@ -116,20 +155,28 @@ def _string_set(payload: dict[str, object], key: str, name: str) -> set[str]:
     return set(values)
 
 
-def load_seen(path: Path) -> tuple[set[str], set[str]]:
-    """Return (posted, scored_below). Missing means a first run; corrupt errors, never resets."""
+def load_seen(path: Path) -> tuple[set[str], set[str], set[str]]:
+    """Return (posted, scored_below, drafted). Missing means a first run; corrupt errors,
+    never resets."""
     if not path.exists():
-        return set(), set()
+        return set(), set(), set()
     payload = _read_json(path)
     if not isinstance(payload, dict):
         raise StateError(f"state file {path.name} has an unsupported format")
     match payload.get("version"):
         case 1:
-            return _string_set(payload, "ids", path.name), set()
+            return _string_set(payload, "ids", path.name), set(), set()
         case 2:
             return (
                 _string_set(payload, "posted", path.name),
                 _string_set(payload, "scored_below", path.name),
+                set(),
+            )
+        case 3:
+            return (
+                _string_set(payload, "posted", path.name),
+                _string_set(payload, "scored_below", path.name),
+                _string_set(payload, "drafted", path.name),
             )
         case _:
             raise StateError(f"state file {path.name} has an unsupported format")
@@ -168,6 +215,7 @@ def serialize_state(state: RadarState) -> dict[str, str]:
         "version": SEEN_VERSION,
         "posted": sorted(state.posted),
         "scored_below": sorted(state.scored_below),
+        "drafted": sorted(state.drafted),
     }
     return {
         SEEN_FILENAME: json.dumps(seen, indent=1) + "\n",
@@ -192,10 +240,12 @@ class FileStateStore:
         self.directory = directory
 
     def load(self) -> RadarState:
-        posted, scored_below = load_seen(self.directory / SEEN_FILENAME)
+        posted, scored_below, drafted = load_seen(self.directory / SEEN_FILENAME)
         usage = load_usage(self.directory / USAGE_FILENAME)
         lag = _load_model(self.directory / LAG_FILENAME, LagStats)
-        return RadarState(posted=posted, scored_below=scored_below, usage=usage, lag=lag)
+        return RadarState(
+            posted=posted, scored_below=scored_below, usage=usage, lag=lag, drafted=drafted
+        )
 
     def persist(self, state: RadarState, message: str) -> None:
         save_state(self.directory, state)

@@ -117,6 +117,6 @@ class Drafter:
             )
 
         drafts = call_parsed(
-            self._budget, self._model, self._settings.draft_max_tokens, send, DraftResult
+            self._budget, self._model, "draft", self._settings.draft_max_tokens, send, DraftResult
         )
         return keep_grounded_edits(drafts, resume)

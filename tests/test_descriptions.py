@@ -5,7 +5,12 @@ import pytest
 import respx
 
 from radar.net import make_client
-from radar.sources.descriptions import DescriptionFetcher, html_to_text, is_safe_url
+from radar.sources.descriptions import (
+    DescriptionFetcher,
+    html_to_text,
+    is_safe_url,
+    strip_boilerplate,
+)
 
 LONG_TEXT = "Responsibilities include building services. " * 20
 FIRST_JOB = "11111111-2222-4333-8444-555555555555"
@@ -227,3 +232,49 @@ def test_unexpected_payload_shapes_fall_back_instead_of_crashing() -> None:
         )
 
     assert result.via == "not_found"
+
+
+JOB = "\n".join(
+    [
+        "Software Engineer Intern, Summer 2027",
+        "- Build Python services for our payments platform",
+        "- Pursuing a BS in Computer Science, graduating 2028",
+        "We are an equal opportunity employer and value diversity. All qualified applicants "
+        "will receive consideration without regard to race, religion, citizenship or age.",
+        "We provide reasonable accommodation for applicants with disabilities.",
+        "This employer participates in E-Verify.",
+        "Relocation assistance is available. We are an Equal Opportunity Employer.",
+        "We do not sponsor visas; applicants must be authorized to work in the US (EEO).",
+        "Read our privacy notice before applying.",
+    ]
+)
+
+
+def test_strip_boilerplate_drops_legal_notices_and_keeps_the_job() -> None:
+    lines = strip_boilerplate(JOB).splitlines()
+
+    assert lines == [
+        "Software Engineer Intern, Summer 2027",
+        "- Build Python services for our payments platform",
+        "- Pursuing a BS in Computer Science, graduating 2028",
+        "Relocation assistance is available. We are an Equal Opportunity Employer.",
+        "We do not sponsor visas; applicants must be authorized to work in the US (EEO).",
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Must be a U.S. citizen to obtain a security clearance (equal opportunity employer).",
+        "Housing stipend provided. Affirmative action employer.",
+        "This role is subject to ITAR export control; EEO statement below.",
+    ],
+)
+def test_strip_boilerplate_keeps_eligibility_facts(line: str) -> None:
+    assert strip_boilerplate(line) == line
+
+
+def test_strip_boilerplate_leaves_plain_text_alone() -> None:
+    text = "Work on search ranking.\nCollaborate with designers."
+
+    assert strip_boilerplate(text) == text

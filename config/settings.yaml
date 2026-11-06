@@ -10,6 +10,8 @@ delivery:
   alert_cooldown_hours: 6
   board_down_after: 3
   watchlist_max_age_days: 45
+  # Drafts are made only when someone reacts to a card; this caps a burst of reactions.
+  max_drafts_per_run: 5
 
 thresholds:
   post: 60
@@ -26,6 +28,9 @@ models:
 
 scoring:
   max_description_chars: 15000
+  # Drop EEO/legal notice lines before scoring. Off until scripts/eval_scoring.py shows
+  # scores hold; see README.
+  strip_boilerplate: false
   score_effort: medium
   score_max_tokens: 8000
   draft_effort: medium
