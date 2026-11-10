@@ -412,7 +412,8 @@
    53.7,
    7.2,
    17.8,
-   2.7
+   2.7,
+   10.9
   ],
   "greenhouse": [
    10.1,
@@ -494,7 +495,6 @@
   ]
  },
  "simplify_delay_minutes": [
-  90.7,
   328.3,
   484.5,
   135.6,
@@ -693,7 +693,8 @@
   0.0,
   0.0,
   424.5,
-  74.1
+  74.1,
+  -250810.5
  ],
  "measured_pairs": [
   "simplify:3f12b8ac-a406-4397-9458-ea07e6d144b3",
@@ -1313,7 +1314,8 @@
   "simplify:05db53e8-06ac-4c35-9f36-918e9d7ee3c2",
   "simplify:c0f9841a-4867-4a52-8302-9f1d9e05ca08",
   "simplify:cb8d1798-06f5-4059-9e2e-faab713e899e",
-  "simplify:f8f1d3de-c885-4d0f-b2bb-5d806c23fd4d"
+  "simplify:f8f1d3de-c885-4d0f-b2bb-5d806c23fd4d",
+  "simplify:1677419e-8d02-4e05-b049-cd051f2b1b28"
  ],
  "board_failures": {}
 }
