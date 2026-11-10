@@ -468,7 +468,10 @@
    1.7,
    22.9,
    2.0,
-   0.3
+   0.3,
+   23.6,
+   12.6,
+   1.5
   ],
   "lever": [
    1.4,
@@ -494,7 +497,8 @@
    5.5,
    92.6,
    23.0,
-   2.6
+   2.6,
+   17.0
   ]
  },
  "simplify_delay_minutes": [
@@ -1321,5 +1325,7 @@
   "simplify:1677419e-8d02-4e05-b049-cd051f2b1b28",
   "simplify:f4714242-ad4a-4bef-9ee7-8dc639cd7e0f"
  ],
- "board_failures": {}
+ "board_failures": {
+  "greenhouse/andurilindustries": 1
+ }
 }
