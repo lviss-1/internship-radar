@@ -512,7 +512,6 @@
   ]
  },
  "simplify_delay_minutes": [
-  1133716.4,
   180.0,
   180.6,
   179.8,
@@ -711,7 +710,8 @@
   -1109.4,
   -1196.0,
   -1226.7,
-  -1022.7
+  -1022.7,
+  0.0
  ],
  "measured_pairs": [
   "simplify:3f12b8ac-a406-4397-9458-ea07e6d144b3",
@@ -1340,7 +1340,8 @@
   "simplify:ffd39d30-42ea-42da-af1b-347fc146a71a",
   "simplify:f6f476c2-5053-433d-91b6-ffe423294891",
   "simplify:6f56f938-52a1-426d-a979-45b4ab73ed2c",
-  "simplify:10be2e60-c579-4804-8665-b9ea32e009ab"
+  "simplify:10be2e60-c579-4804-8665-b9ea32e009ab",
+  "simplify:46b48762-e76f-4598-8440-e22bebf7a645"
  ],
  "board_failures": {}
 }
