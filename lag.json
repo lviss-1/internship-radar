@@ -1435,20 +1435,5 @@
   "simplify:168ba909-6064-4747-bdff-92fe004850cd",
   "simplify:025c8fcb-d728-4999-b384-666f9e4eaf4f"
  ],
- "board_failures": {
-  "lever/zoox": 2,
-  "lever/tri": 2,
-  "lever/pattern": 2,
-  "lever/standtogether": 2,
-  "lever/anavationllc": 2,
-  "lever/cfsenergy": 2,
-  "lever/field-ai": 2,
-  "lever/hermeus": 2,
-  "lever/immuta": 2,
-  "lever/make-rain": 2,
-  "lever/neighbor": 2,
-  "lever/shieldai": 2,
-  "lever/thinkahead": 2,
-  "lever/xsolla": 2
- }
+ "board_failures": {}
 }
