@@ -195,10 +195,6 @@
  },
  "radar_minutes": {
   "simplify": [
-   51.5,
-   51.4,
-   31.5,
-   1650.5,
    38.7,
    38.7,
    510.4,
@@ -394,7 +390,11 @@
    46.7,
    41.3,
    61.0,
-   34.2
+   34.2,
+   82.7,
+   82.7,
+   82.7,
+   80.8
   ],
   "ashby": [
    14.8,
@@ -1435,5 +1435,20 @@
   "simplify:168ba909-6064-4747-bdff-92fe004850cd",
   "simplify:025c8fcb-d728-4999-b384-666f9e4eaf4f"
  ],
- "board_failures": {}
+ "board_failures": {
+  "lever/zoox": 1,
+  "lever/tri": 1,
+  "lever/pattern": 1,
+  "lever/standtogether": 1,
+  "lever/anavationllc": 1,
+  "lever/cfsenergy": 1,
+  "lever/field-ai": 1,
+  "lever/hermeus": 1,
+  "lever/immuta": 1,
+  "lever/make-rain": 1,
+  "lever/neighbor": 1,
+  "lever/shieldai": 1,
+  "lever/thinkahead": 1,
+  "lever/xsolla": 1
+ }
 }
