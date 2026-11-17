@@ -1436,19 +1436,19 @@
   "simplify:025c8fcb-d728-4999-b384-666f9e4eaf4f"
  ],
  "board_failures": {
-  "lever/zoox": 1,
-  "lever/tri": 1,
-  "lever/pattern": 1,
-  "lever/standtogether": 1,
-  "lever/anavationllc": 1,
-  "lever/cfsenergy": 1,
-  "lever/field-ai": 1,
-  "lever/hermeus": 1,
-  "lever/immuta": 1,
-  "lever/make-rain": 1,
-  "lever/neighbor": 1,
-  "lever/shieldai": 1,
-  "lever/thinkahead": 1,
-  "lever/xsolla": 1
+  "lever/zoox": 2,
+  "lever/tri": 2,
+  "lever/pattern": 2,
+  "lever/standtogether": 2,
+  "lever/anavationllc": 2,
+  "lever/cfsenergy": 2,
+  "lever/field-ai": 2,
+  "lever/hermeus": 2,
+  "lever/immuta": 2,
+  "lever/make-rain": 2,
+  "lever/neighbor": 2,
+  "lever/shieldai": 2,
+  "lever/thinkahead": 2,
+  "lever/xsolla": 2
  }
 }
