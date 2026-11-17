@@ -564,7 +564,8 @@
    0.2,
    15.6,
    5.7,
-   3.5
+   3.5,
+   30.6
   ]
  },
  "simplify_delay_minutes": [
@@ -1433,5 +1434,7 @@
   "simplify:6b1eaa5d-98a1-4f76-bc2d-7e99beb87572",
   "simplify:168ba909-6064-4747-bdff-92fe004850cd"
  ],
- "board_failures": {}
+ "board_failures": {
+  "greenhouse/andurilindustries": 1
+ }
 }
