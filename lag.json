@@ -195,8 +195,6 @@
  },
  "radar_minutes": {
   "simplify": [
-   65.2,
-   60.4,
    52.7,
    52.7,
    48.7,
@@ -394,7 +392,9 @@
    47.6,
    45.8,
    45.8,
-   42.6
+   42.6,
+   141.7,
+   44.1
   ],
   "ashby": [
    14.8,
@@ -1434,7 +1434,5 @@
   "simplify:6b1eaa5d-98a1-4f76-bc2d-7e99beb87572",
   "simplify:168ba909-6064-4747-bdff-92fe004850cd"
  ],
- "board_failures": {
-  "greenhouse/andurilindustries": 1
- }
+ "board_failures": {}
 }
