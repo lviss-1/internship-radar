@@ -1,20 +1,20 @@
 {
  "version": 1,
  "month": "2026-11",
- "month_usd": 0.663287,
+ "month_usd": 0.664546,
  "month_by_kind": {
   "score": {
-   "calls": 584,
-   "metered_calls": 584,
-   "usd": 0.376014,
-   "input_tokens": 906004,
-   "output_tokens": 372169,
+   "calls": 585,
+   "metered_calls": 585,
+   "usd": 0.377273,
+   "input_tokens": 908472,
+   "output_tokens": 373139,
    "cache_read_tokens": 2069756,
-   "cache_write_tokens": 629249
+   "cache_write_tokens": 633468
   }
  },
  "day": "2026-11-18",
- "day_calls": 5,
+ "day_calls": 6,
  "budget_alert_day": "",
  "heartbeat_day": "2026-11-18",
  "alerts_sent": {}
