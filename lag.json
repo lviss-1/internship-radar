@@ -1503,7 +1503,5 @@
   "simplify:e9d0a2c4-44d9-4b28-bc49-eee5040711c2",
   "simplify:cf9000e5-12f7-4f27-8411-ea80f63beb57"
  ],
- "board_failures": {
-  "greenhouse/andurilindustries": 1
- }
+ "board_failures": {}
 }
