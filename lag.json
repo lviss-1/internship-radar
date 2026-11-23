@@ -621,7 +621,6 @@
   ]
  },
  "simplify_delay_minutes": [
-  -1407.2,
   -1406.7,
   -1082.6,
   -1083.7,
@@ -820,7 +819,8 @@
   0.0,
   -202.3,
   -1350.1,
-  -871.9
+  -871.9,
+  42.6
  ],
  "measured_pairs": [
   "simplify:3f12b8ac-a406-4397-9458-ea07e6d144b3",
@@ -1515,9 +1515,10 @@
   "simplify:4639a999-7834-40d5-a4ab-f1da249fc026",
   "simplify:1c079a77-a351-49ec-9265-bac5e53ddffe",
   "simplify:76127016-50b2-48d1-99eb-f720b5ff3a2d",
-  "simplify:a628d336-09fd-45c3-bd3c-fcfe8c92c533"
+  "simplify:a628d336-09fd-45c3-bd3c-fcfe8c92c533",
+  "simplify:6eff9788-f38e-4357-8646-cd6f5984f3cb"
  ],
  "board_failures": {
-  "ashby/f7d8749a-72d6-407c-bf98-292ea630c73a": 10
+  "ashby/f7d8749a-72d6-407c-bf98-292ea630c73a": 11
  }
 }
