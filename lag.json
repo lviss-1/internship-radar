@@ -615,7 +615,9 @@
    15.4,
    1143.3,
    0.7,
-   2.9
+   2.9,
+   18.4,
+   16.0
   ]
  },
  "simplify_delay_minutes": [
@@ -1516,6 +1518,6 @@
   "simplify:a628d336-09fd-45c3-bd3c-fcfe8c92c533"
  ],
  "board_failures": {
-  "ashby/f7d8749a-72d6-407c-bf98-292ea630c73a": 4
+  "ashby/f7d8749a-72d6-407c-bf98-292ea630c73a": 5
  }
 }
