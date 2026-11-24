@@ -41,12 +41,9 @@ def card(
     down: int = 0,
     age_days: float = 1,
     message_id: str = "1",
-    draft: int = 0,
     webhook_id: str | None = WEBHOOK_ID,
 ) -> dict[str, Any]:
     reactions = []
-    if draft:
-        reactions.append({"emoji": {"name": "\N{WRITING HAND}\ufe0f"}, "count": draft})
     if up:
         reactions.append({"emoji": {"name": "\N{THUMBS UP SIGN}"}, "count": up, "me": False})
     if down:
@@ -192,40 +189,3 @@ def test_scorer_prompt_includes_examples_only_when_present(settings: Any) -> Non
     assert "<feedback_examples>" in with_examples
     assert "<feedback_examples>" not in system_text(Feedback())
     assert "<feedback_examples>" not in system_text(None)
-
-
-def test_draft_reactions_on_own_posts_are_collected_oldest_first() -> None:
-    feedback = read(
-        [
-            card("New — Intern", draft=1, message_id="3"),
-            card("Mid — Intern", draft=1, up=1, message_id="2"),
-            card("Old — Intern", draft=1, message_id="1"),
-        ]
-    )
-
-    assert [embed["title"] for embed in feedback.draft_cards] == [
-        "Old — Intern", "Mid — Intern", "New — Intern",
-    ]  # fmt: skip
-    assert [example.title for example in feedback.liked] == ["Mid — Intern"]
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        card("Acme — SWE Intern", draft=1, webhook_id=None),
-        card("Acme — SWE Intern", draft=1, webhook_id="999"),
-        card("Drafts: Acme — SWE Intern", draft=1),
-        card("Acme — SWE Intern", up=1),
-    ],
-)
-def test_draft_reactions_elsewhere_are_ignored(message: dict[str, Any]) -> None:
-    assert read([message]).draft_cards == []
-
-
-def test_draft_reactions_need_the_webhook_id_to_verify_authorship() -> None:
-    with respx.mock() as mock, make_client() as client:
-        mock.get(WEBHOOK_URL).mock(return_value=httpx.Response(200, json={"channel_id": CHANNEL}))
-        mock.get(MESSAGES).mock(return_value=httpx.Response(200, json=[card("A — B", draft=1)]))
-        feedback = read_feedback(client, CONFIG, NOW)
-
-    assert feedback.draft_cards == []

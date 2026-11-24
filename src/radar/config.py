@@ -37,7 +37,6 @@ class DeliverySettings(StrictModel):
     alert_cooldown_hours: float = Field(gt=0)
     board_down_after: int = Field(gt=0)
     watchlist_max_age_days: int = Field(gt=0)
-    max_drafts_per_run: int = Field(gt=0)
 
 
 class Thresholds(StrictModel):
@@ -53,7 +52,6 @@ class QuietHours(StrictModel):
 
 class ModelSettings(StrictModel):
     cheap: str
-    strong: str
 
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -64,8 +62,6 @@ class ScoringSettings(StrictModel):
     strip_boilerplate: bool
     score_effort: Effort
     score_max_tokens: int = Field(gt=0)
-    draft_effort: Effort
-    draft_max_tokens: int = Field(gt=0)
     request_timeout_seconds: float = Field(gt=0)
     worst_case_input_tokens: int = Field(gt=0)
 
@@ -143,9 +139,8 @@ class ConfigError(Exception):
 def _check_cross_fields(settings: Settings) -> None:
     if settings.thresholds.ping < settings.thresholds.post:
         raise ConfigError("thresholds.ping must be >= thresholds.post")
-    missing = {settings.models.cheap, settings.models.strong} - settings.pricing.keys()
-    if missing:
-        raise ConfigError(f"pricing is missing models: {sorted(missing)}")
+    if settings.models.cheap not in settings.pricing:
+        raise ConfigError(f"pricing is missing model: {settings.models.cheap}")
 
 
 def load_settings(path: Path = DEFAULT_SETTINGS_PATH) -> Settings:

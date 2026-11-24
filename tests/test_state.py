@@ -57,8 +57,6 @@ RELOCATION = {"KnowBe4"}
 
 
 def fake_model(body: dict[str, Any]) -> httpx2.Response:
-    if body["model"] == "claude-sonnet-5-5":
-        return httpx2.Response(200, json=anthropic_fixture("drafts_message.json"))
     content = body["messages"][0]["content"]
     company = re.search(r"<company>(.*?)</company>", content).group(1)  # type: ignore[union-attr]
     if company in REFUSED:
@@ -88,7 +86,7 @@ class RecordingHook:
         self.sent.append(payload)
 
     def cards(self) -> list[dict[str, Any]]:
-        return [p for p in self.sent if not p["embeds"][0]["title"].startswith("Drafts: ")]
+        return [p for p in self.sent if p.get("embeds")]
 
 
 class RecordingStore(FileStateStore):
@@ -138,10 +136,6 @@ def run_once(
         )
 
 
-def offers_drafts(card: dict[str, Any]) -> bool:
-    return any(item["name"] == "Drafts" for item in card["embeds"][0]["fields"])
-
-
 def card_titles(hook: RecordingHook) -> list[str]:
     return [payload["embeds"][0]["title"] for payload in hook.cards()]
 
@@ -155,30 +149,47 @@ def test_missing_state_is_a_first_run(tmp_path: Path) -> None:
 def test_version_1_state_migrates(tmp_path: Path) -> None:
     (tmp_path / SEEN_FILENAME).write_text(json.dumps({"version": 1, "ids": ["simplify:a"]}))
 
-    assert load_seen(tmp_path / SEEN_FILENAME) == ({"simplify:a"}, set(), set())
+    assert load_seen(tmp_path / SEEN_FILENAME) == ({"simplify:a"}, set())
 
 
 def test_version_2_state_migrates(tmp_path: Path) -> None:
     payload = {"version": 2, "posted": ["simplify:a"], "scored_below": ["simplify:b"]}
     (tmp_path / SEEN_FILENAME).write_text(json.dumps(payload))
 
-    assert load_seen(tmp_path / SEEN_FILENAME) == ({"simplify:a"}, {"simplify:b"}, set())
+    assert load_seen(tmp_path / SEEN_FILENAME) == ({"simplify:a"}, {"simplify:b"})
+
+
+def test_version_3_state_loads_and_drops_the_retired_drafted_set(tmp_path: Path) -> None:
+    payload = {
+        "version": 3,
+        "posted": ["simplify:a"],
+        "scored_below": ["simplify:b"],
+        "drafted": ["simplify:a"],
+    }
+    (tmp_path / SEEN_FILENAME).write_text(json.dumps(payload))
+    store = FileStateStore(tmp_path)
+
+    store.persist(store.load(), "save")
+
+    assert json.loads((tmp_path / SEEN_FILENAME).read_text()) == {
+        "version": 2,
+        "posted": ["simplify:a"],
+        "scored_below": ["simplify:b"],
+    }
 
 
 def test_round_trip_holds_ids_and_numbers_only(tmp_path: Path) -> None:
     store = FileStateStore(tmp_path)
     usage = UsageLedger(month="2026-11", month_usd=1.25, day="2026-11-02", day_calls=3)
-    state = RadarState({"simplify:b", "simplify:a"}, {"simplify:c"}, usage, drafted={"simplify:a"})
+    state = RadarState({"simplify:b", "simplify:a"}, {"simplify:c"}, usage)
     store.persist(state, "save")
 
     seen = json.loads((tmp_path / SEEN_FILENAME).read_text())
     assert seen == {
-        "version": 3,
+        "version": 2,
         "posted": ["simplify:a", "simplify:b"],
         "scored_below": ["simplify:c"],
-        "drafted": ["simplify:a"],
     }
-    assert store.load().drafted == {"simplify:a"}
     assert store.load().usage == usage
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         LAG_FILENAME,
@@ -224,22 +235,25 @@ def test_per_kind_usage_round_trips(tmp_path: Path) -> None:
     store = FileStateStore(tmp_path)
     usage = UsageLedger(month="2026-11", day="2026-11-05")
     usage.record(0.002, "score", TokenCounts(input=900, output=300, cache_read=2400))
-    usage.record(0.04, "draft", None)
+    usage.record(0.04, "score", None)
     store.persist(RadarState(usage=usage), "save")
 
     loaded = store.load().usage
 
     assert loaded == usage
-    assert loaded.month_by_kind["draft"] == KindUsage(calls=1, usd=0.04)
+    assert loaded.month_by_kind["score"] == KindUsage(
+        calls=2, metered_calls=1, usd=0.042, input_tokens=900, output_tokens=300,
+        cache_read_tokens=2400,
+    )  # fmt: skip
     assert loaded.month_usd == pytest.approx(0.042)
 
 
 def test_month_roll_clears_per_kind_usage() -> None:
     ledger = UsageLedger(month="2026-10", day="2026-10-31")
-    ledger.record(0.5, "draft", TokenCounts(input=1, output=1))
+    ledger.record(0.5, "score", TokenCounts(input=1, output=1))
 
     ledger.roll(date(2026, 10, 31))
-    assert "draft" in ledger.month_by_kind
+    assert "score" in ledger.month_by_kind
 
     ledger.roll(date(2026, 11, 1))
     assert ledger.month_by_kind == {}
@@ -268,7 +282,6 @@ def test_scored_pipeline_posts_and_records_correctly(
 
     state = store.load()
     cards = {p["embeds"][0]["title"].split(" — ")[0]: p for p in matches.cards()}
-    drafts = [p for p in matches.sent if p["embeds"][0]["title"].startswith("Drafts: ")]
     assert set(cards) == {
         "Andreessen Horowitz",
         "Microsoft",
@@ -281,15 +294,13 @@ def test_scored_pipeline_posts_and_records_correctly(
     assert cards["KnowBe4"].get("content") == "<@42>"
     assert "content" not in cards["Nokia"] and cards["Nokia"]["flags"] != 0
     assert cards["Entrust"]["embeds"][0]["fields"][0]["value"] == "Unscored (refused)"
-    assert drafts == []
-    assert not any(offers_drafts(card) for card in cards.values()), "no bot, so no draft offers"
     assert own_keys(state.scored_below) == 1 and own_keys(state.posted) == 6
     assert {key for key in state.posted if key.startswith("greenhouse:")}
-    assert (summary.scored, summary.drafted, summary.dropped_edits) == (6, 0, 0)
+    assert summary.scored == 6
     assert summary.unscored == {"refused": 1}
     assert state.usage.day_calls == 7
     assert state.usage.month_usd > 0
-    assert [r for r in claude.requests if r["model"] == "claude-sonnet-5-5"] == []
+    assert {r["model"] for r in claude.requests} == {"claude-haiku-5-5"}
 
 
 def test_three_consecutive_runs_never_rescore_or_repost(

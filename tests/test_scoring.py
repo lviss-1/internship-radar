@@ -126,7 +126,7 @@ def test_usage_is_recorded_at_configured_prices(settings: Settings) -> None:
         1200, 2400, 0,
     )  # fmt: skip
     assert totals.output_tokens == 400
-    assert "draft" not in ledger.month_by_kind
+    assert list(ledger.month_by_kind) == ["score"]
 
 
 def test_refusal_is_a_failure_not_a_score(settings: Settings) -> None:
@@ -203,7 +203,7 @@ def test_cost_formula(settings: Settings) -> None:
         cache_creation_input_tokens=0,
     )
 
-    assert cost_usd(settings.pricing["claude-sonnet-5-5"], usage) == pytest.approx(12.0)
+    assert cost_usd(settings.pricing["claude-haiku-5-5"], usage) == pytest.approx(0.60)
 
 
 def test_resumes_come_from_env_and_never_print(monkeypatch: pytest.MonkeyPatch) -> None:

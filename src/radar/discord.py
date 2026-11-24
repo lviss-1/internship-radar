@@ -1,25 +1,18 @@
-import re
 import time
 from collections.abc import Callable
-from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import ValidationError
 
-from radar.delivery import RELOCATION_MENTIONED, Decision, Evaluation
-from radar.feedback import DRAFT_EMOJI, DRAFTS_PREFIX
-from radar.filters import LocationKind, Match
+from radar.delivery import Decision, Evaluation
+from radar.filters import LocationKind
 from radar.net import NetworkError, request_with_retries
-from radar.normalize import Posting
-from radar.scoring import ScoreResult
 
 SUPPRESS_NOTIFICATIONS = 1 << 12
 TITLE_LIMIT = 256
 FIELD_LIMIT = 1024
 CONTENT_LIMIT = 2000
-DESCRIPTION_LIMIT = 4096
 EMBED_TOTAL_LIMIT = 5900
 USERNAME = "Internship Radar"
 WEBHOOK_HOSTS = frozenset(
@@ -36,11 +29,7 @@ LOCATION_LABELS = {
     LocationKind.REMOTE_US: "Remote (US)",
     LocationKind.OTHER_US: "Other US (needs relocation)",
 }
-DRAFTS_FIELD = "Drafts"
-DRAFTS_HINT = f"React {DRAFT_EMOJI} for resume edits, a cover note and a referral message."
-FOOTER_SEPARATOR = " · "
 REF_MARKER = " · ref "
-_SCORE_HEADLINE = re.compile(r"^(\d{1,3})/100 · (SWE|PM) resume$")
 
 
 class DiscordError(Exception):
@@ -142,11 +131,11 @@ def _shrink_to_fit(embed: dict[str, Any]) -> dict[str, Any]:
     return embed
 
 
-def _posting_embed(evaluation: Evaluation, title_prefix: str = "") -> dict[str, Any]:
+def _posting_embed(evaluation: Evaluation) -> dict[str, Any]:
     posting = evaluation.match.posting
     footer = posting.source if not posting.category else f"{posting.source} · {posting.category}"
     return {
-        "title": _truncate(f"{title_prefix}{posting.company} — {posting.title}", TITLE_LIMIT),
+        "title": _truncate(f"{posting.company} — {posting.title}", TITLE_LIMIT),
         "url": str(posting.url),
         "color": LOCATION_COLORS[evaluation.match.location_kind],
         "footer": {"text": footer},
@@ -180,8 +169,6 @@ def score_card_payload(
         fields.append(_field("Eligibility flags", _bullets(score.eligibility_flags), inline=False))
     if decision.tags:
         fields.append(_field("Tags", ", ".join(decision.tags), inline=False))
-    if score and decision.draftable:
-        fields.append(_field(DRAFTS_FIELD, DRAFTS_HINT, inline=False))
 
     embed = _posting_embed(evaluation)
     embed["footer"]["text"] += f"{REF_MARKER}{posting.key}"
@@ -196,90 +183,6 @@ def score_card_payload(
     if mention:
         payload["content"] = f"<@{mention}>"
     return payload
-
-
-def drafts_payload(evaluation: Evaluation) -> dict[str, Any]:
-    drafts = evaluation.drafts
-    if drafts is None:
-        raise ValueError("evaluation has no drafts")
-    fields = [_field("Referral message", drafts.referral_message, inline=False)]
-    for number, edit in enumerate(drafts.resume_edits, start=1):
-        text = f"**Original:** {edit.original}\n**Suggested:** {edit.suggested}"
-        if edit.why:
-            text += f"\n**Why:** {edit.why}"
-        fields.append(_field(f"Resume edit {number}", text, inline=False))
-    if not drafts.resume_edits:
-        fields.append(_field("Resume edits", "No grounded edits suggested.", inline=False))
-
-    embed = {
-        **_posting_embed(evaluation, title_prefix=DRAFTS_PREFIX),
-        "description": _truncate(f"**Cover note**\n{drafts.cover_note}", DESCRIPTION_LIMIT),
-        "fields": fields,
-    }
-    return {
-        "username": USERNAME,
-        "embeds": [_shrink_to_fit(embed)],
-        "allowed_mentions": {"parse": []},
-        "flags": SUPPRESS_NOTIFICATIONS,
-    }
-
-
-def _bullet_lines(value: str) -> list[str]:
-    return [line.removeprefix("• ").strip() for line in value.splitlines() if line.strip()]
-
-
-def card_request(embed: dict[str, Any]) -> Evaluation | None:
-    """Rebuild the posting and score from a score card that offered drafts.
-
-    The inverse of `score_card_payload`. The card is the only record of a posting's title
-    and score, because the public state branch holds IDs only. Returns None for anything
-    that isn't a draftable card in the current format, including cards posted before drafts
-    became on-request.
-    """
-    fields = {item.get("name"): item.get("value") or "" for item in embed.get("fields") or []}
-    title = embed.get("title") or ""
-    footer = (embed.get("footer") or {}).get("text") or ""
-    base, marker, key = footer.rpartition(REF_MARKER)
-    company, dash, role = title.partition(" — ")
-    headline = _SCORE_HEADLINE.match(fields.get("Score", ""))
-    kind = next((k for k, label in LOCATION_LABELS.items() if label == fields.get("Fit")), None)
-    if (
-        DRAFTS_FIELD not in fields
-        or title.startswith(DRAFTS_PREFIX)
-        or not (marker and dash and headline and kind)
-    ):
-        return None
-
-    source, _, source_id = key.partition(":")
-    category = base.partition(FOOTER_SEPARATOR)[2] or None
-    location = fields.get("Location", "")
-    season = fields.get("Season", "")
-    tags = fields.get("Tags", "").split(", ")
-    try:
-        posting = Posting(
-            source=source,  # type: ignore[arg-type]
-            source_id=source_id,
-            company=company,
-            title=role,
-            locations=[location] if location and location != "Unknown" else [],
-            url=embed.get("url") or "",
-            posted_at=datetime.fromisoformat(embed.get("timestamp") or ""),
-            terms=[season] if season and season != "N/A" else [],
-            category=category,
-        )
-        score = ScoreResult(
-            resume=headline.group(2).lower(),  # type: ignore[arg-type]
-            score=int(headline.group(1)),
-            reasons=_bullet_lines(fields.get("Why it fits", "")),
-            gaps=_bullet_lines(fields.get("Gaps", "")),
-            relocation_mentioned=RELOCATION_MENTIONED in tags,
-            eligibility_flags=_bullet_lines(fields.get("Eligibility flags", "")),
-        )
-    except (ValidationError, ValueError):
-        return None
-    if posting.key != key or base.partition(FOOTER_SEPARATOR)[0] != source:
-        return None
-    return Evaluation(Match(posting, kind), description_found=False, score=score)
 
 
 def text_payload(text: str, *, silent: bool = True) -> dict[str, Any]:

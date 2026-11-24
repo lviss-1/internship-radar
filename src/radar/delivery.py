@@ -3,7 +3,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from radar.config import QuietHours, Thresholds
-from radar.drafts import DraftResult
 from radar.filters import LocationKind, Match, Tag
 from radar.scoring import ScoreResult
 
@@ -18,7 +17,6 @@ class Evaluation:
     match: Match
     description_found: bool
     score: ScoreResult | None = None
-    drafts: DraftResult | None = None
     unscored_reason: str | None = None
 
 
@@ -28,7 +26,6 @@ class Decision:
     silent: bool = True
     ping: bool = False
     tags: tuple[str, ...] = ()
-    draftable: bool = False
 
 
 def in_quiet_hours(now: datetime, quiet: QuietHours) -> bool:
@@ -45,8 +42,6 @@ def decide(
 
     Unscored matches still post, silently, so a scoring outage never hides a posting.
     Out-of-area roles stay silent unless relocation is mentioned, even at a high score.
-    Drafts are offered on request for high scores, except out-of-area roles without
-    relocation, which are not worth applying to.
     """
     match = evaluation.match
     tags = [tag for tag in match.tags if tag is not Tag.RELOCATION_UNKNOWN or not evaluation.score]
@@ -65,10 +60,4 @@ def decide(
     relocation_blocked = needs_relocation and not score.relocation_mentioned
     silent = relocation_blocked or in_quiet_hours(now, quiet)
     high = score.score >= thresholds.ping
-    return Decision(
-        post=True,
-        silent=silent,
-        ping=high and not silent,
-        tags=tuple(tags),
-        draftable=high and not relocation_blocked,
-    )
+    return Decision(post=True, silent=silent, ping=high and not silent, tags=tuple(tags))

@@ -10,12 +10,9 @@ from radar.discord import (
     TITLE_LIMIT,
     DiscordError,
     DiscordWebhook,
-    card_request,
-    drafts_payload,
     score_card_payload,
     text_payload,
 )
-from radar.drafts import DraftResult, ResumeEdit
 from radar.filters import LocationKind, Match
 from radar.net import make_client
 from radar.scoring import ScoreResult
@@ -184,89 +181,10 @@ def test_long_titles_are_truncated() -> None:
     assert len(payload["embeds"][0]["title"]) == TITLE_LIMIT
 
 
-def test_drafts_payload_fits_discord_limits_at_maximum_sizes() -> None:
-    edits = [ResumeEdit(original="o" * 600, suggested="s" * 600, why="w" * 300)] * 5
-    drafts = DraftResult(resume_edits=edits, cover_note="c" * 1500, referral_message="r" * 800)
-
-    payload = drafts_payload(scored_evaluation(drafts=drafts))
-
-    embed = payload["embeds"][0]
-    assert embed_size(embed) <= 6000
-    assert all(len(f["value"]) <= 1024 for f in embed["fields"])
-    assert payload["flags"] == SUPPRESS_NOTIFICATIONS
-    assert payload["allowed_mentions"] == {"parse": []}
-
-
-def test_drafts_payload_says_when_no_edits_survived() -> None:
-    drafts = DraftResult(resume_edits=[], cover_note="note", referral_message="hi")
-
-    fields = drafts_payload(scored_evaluation(drafts=drafts))["embeds"][0]["fields"]
-
-    assert fields[-1]["value"] == "No grounded edits suggested."
-
-
-DRAFTABLE = Decision(post=True, silent=False, ping=True, tags=(), draftable=True)
-
-
-def test_draftable_card_offers_drafts_and_carries_the_posting_key() -> None:
-    embed = score_card_payload(scored_evaluation(), DRAFTABLE, None)["embeds"][0]
-
-    assert embed["footer"]["text"] == "simplify · Software · ref simplify:abc"
-    assert embed["fields"][-1]["name"] == "Drafts"
-
-
-def test_card_without_draft_offer_has_no_hint() -> None:
-    decision = Decision(post=True, silent=True, ping=False, tags=())
+def test_card_footer_carries_the_posting_key() -> None:
+    decision = Decision(post=True, silent=False, ping=True, tags=())
 
     embed = score_card_payload(scored_evaluation(), decision, None)["embeds"][0]
 
+    assert embed["footer"]["text"] == "simplify · Software · ref simplify:abc"
     assert all(item["name"] != "Drafts" for item in embed["fields"])
-    assert card_request(embed) is None
-
-
-def test_card_request_rebuilds_posting_and_score() -> None:
-    posting = make_posting(
-        source="greenhouse",
-        source_id="8046730003",
-        locations=["New York, NY", "Remote"],
-        category=None,
-        terms=[],
-    )
-    evaluation = scored_evaluation(match=Match(posting, LocationKind.OTHER_US))
-    decision = Decision(post=True, tags=("relocation mentioned",), draftable=True)
-    embed = score_card_payload(evaluation, decision, None)["embeds"][0]
-
-    request = card_request(json.loads(json.dumps(embed)))
-
-    assert request is not None
-    rebuilt = request.match.posting
-    assert (rebuilt.key, rebuilt.company, rebuilt.title) == (
-        "greenhouse:8046730003", "Example Co", "Software Engineer Intern",
-    )  # fmt: skip
-    assert rebuilt.locations == ["New York, NY, Remote"]
-    assert (str(rebuilt.url), rebuilt.posted_at, rebuilt.terms) == (
-        str(posting.url),
-        posting.posted_at,
-        [],
-    )
-    assert request.match.location_kind is LocationKind.OTHER_US
-    assert request.score == SCORE.model_copy(update={"relocation_mentioned": True})
-
-
-@pytest.mark.parametrize(
-    "tamper",
-    [
-        lambda e: e["footer"].update(text="simplify · Software"),
-        lambda e: e["footer"].update(text="lever · ref simplify:abc"),
-        lambda e: e["footer"].update(text="evil · ref evil:abc"),
-        lambda e: e.update(title="Drafts: Example Co — Software Engineer Intern"),
-        lambda e: e.update(title="No separator here"),
-        lambda e: e["fields"][0].update(value="Unscored (refused)"),
-        lambda e: e.update(url="not a url"),
-    ],
-)
-def test_card_request_rejects_unrecognized_cards(tamper: object) -> None:
-    embed = score_card_payload(scored_evaluation(), DRAFTABLE, None)["embeds"][0]
-    tamper(embed)  # type: ignore[operator]
-
-    assert card_request(embed) is None

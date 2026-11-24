@@ -20,14 +20,13 @@ A GitHub Actions run every ~30 minutes:
 4. **Dedupes** against IDs already handled, stored on the `state` branch.
 5. **Scores** each new match with Claude Haiku: which resume fits, a 0-100 score, reasons, gaps and eligibility flags, returned as strict JSON and validated with pydantic. Recent 👍/👎 reactions go back to the scorer as calibration examples.
 6. **Posts** 60+ to Discord. 80+ also pings me, silently between 01:00 and 07:00 ET.
-7. **Drafts on request.** React ✍️ on an 80+ card and the next run has Claude Sonnet write resume edits, a cover note and a referral message. Any suggested edit that doesn't quote a real line of my resume is dropped.
 
 Problems go to a separate errors channel, at most once per 6 hours each. A daily heartbeat reports spend and detection lag.
 
 ## Guardrails
 
 - **$15/month hard cap.** Every Claude call is checked against it, assuming the call's worst case, before it's made. A warning posts at $10 and there is also a daily call cap. At the cap, matches still post, unscored and silent, until the month resets.
-- **Scoring is cheap, drafting is deliberate.** Scoring is about $0.001 per posting and a draft about $0.04 (estimates), and drafts only happen when I ask.
+- **Scoring is cheap.** About $0.001 per posting (estimate), on Claude Haiku only. Tailoring happens outside the radar, so it spends nothing on drafts.
 - **Job descriptions are untrusted input.** The model has no tools and must return schema-valid JSON. Description fetching follows only public `https` URLs and re-checks every redirect.
 - **Public logs hold no private data.** Actions logs on a public repo are public, so runs log counts and posting IDs only. Never resume text, descriptions or model output.
 
@@ -49,7 +48,7 @@ Problems go to a separate errors channel, at most once per 6 hours each. A daily
 | `ANTHROPIC_API_KEY` | Claude API key |
 | `RESUME_SWE_TEXT`, `RESUME_PM_TEXT` | Plain-text resumes (`gh secret set RESUME_SWE_TEXT < swe.txt`) |
 | `HEALTHCHECK_PING_URL` | healthchecks.io ping URL (optional, recommended) |
-| `DISCORD_BOT_TOKEN` | Read-only bot for 👍/👎 feedback and ✍️ drafts (optional; no drafts without it) |
+| `DISCORD_BOT_TOKEN` | Read-only bot for 👍/👎 feedback (optional) |
 
 **Trigger (cron-job.org).** Create a fine-grained GitHub token for this repo only, with Actions: Read and write. Then add a job that runs every 30 minutes and POSTs `{"ref":"main"}` to `https://api.github.com/repos/<owner>/internship-radar/actions/workflows/radar.yml/dispatches` with the headers `Authorization: Bearer <token>`, `Accept: application/vnd.github+json` and `X-GitHub-Api-Version: 2022-11-28`. A test should return 204. Extra triggers are harmless: runs queue one at a time and state prevents re-posting.
 

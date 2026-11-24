@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 log = logging.getLogger(__name__)
 
-SEEN_VERSION = 3
+SEEN_VERSION = 2
 SEEN_FILENAME = "seen.json"
 USAGE_FILENAME = "usage.json"
 LAG_FILENAME = "lag.json"
@@ -28,7 +28,7 @@ class StateError(Exception):
     pass
 
 
-CallKind = Literal["score", "draft"]
+CallKind = Literal["score"]
 
 
 @dataclass(frozen=True)
@@ -121,7 +121,6 @@ class RadarState:
     scored_below: set[str] = field(default_factory=set)
     usage: UsageLedger = field(default_factory=UsageLedger)
     lag: LagStats = field(default_factory=LagStats)
-    drafted: set[str] = field(default_factory=set)
 
     def handled(self, keys: Iterable[str]) -> bool:
         return any(key in self.posted or key in self.scored_below for key in keys)
@@ -155,28 +154,24 @@ def _string_set(payload: dict[str, object], key: str, name: str) -> set[str]:
     return set(values)
 
 
-def load_seen(path: Path) -> tuple[set[str], set[str], set[str]]:
-    """Return (posted, scored_below, drafted). Missing means a first run; corrupt errors,
-    never resets."""
+def load_seen(path: Path) -> tuple[set[str], set[str]]:
+    """Return (posted, scored_below). Missing means a first run; corrupt errors, never resets.
+
+    Version 3 added a `drafted` set for the retired drafts feature; it still loads and the
+    set is dropped. New saves write version 2 again, so an older checkout can read them.
+    """
     if not path.exists():
-        return set(), set(), set()
+        return set(), set()
     payload = _read_json(path)
     if not isinstance(payload, dict):
         raise StateError(f"state file {path.name} has an unsupported format")
     match payload.get("version"):
         case 1:
-            return _string_set(payload, "ids", path.name), set(), set()
-        case 2:
+            return _string_set(payload, "ids", path.name), set()
+        case 2 | 3:
             return (
                 _string_set(payload, "posted", path.name),
                 _string_set(payload, "scored_below", path.name),
-                set(),
-            )
-        case 3:
-            return (
-                _string_set(payload, "posted", path.name),
-                _string_set(payload, "scored_below", path.name),
-                _string_set(payload, "drafted", path.name),
             )
         case _:
             raise StateError(f"state file {path.name} has an unsupported format")
@@ -215,7 +210,6 @@ def serialize_state(state: RadarState) -> dict[str, str]:
         "version": SEEN_VERSION,
         "posted": sorted(state.posted),
         "scored_below": sorted(state.scored_below),
-        "drafted": sorted(state.drafted),
     }
     return {
         SEEN_FILENAME: json.dumps(seen, indent=1) + "\n",
@@ -240,12 +234,10 @@ class FileStateStore:
         self.directory = directory
 
     def load(self) -> RadarState:
-        posted, scored_below, drafted = load_seen(self.directory / SEEN_FILENAME)
+        posted, scored_below = load_seen(self.directory / SEEN_FILENAME)
         usage = load_usage(self.directory / USAGE_FILENAME)
         lag = _load_model(self.directory / LAG_FILENAME, LagStats)
-        return RadarState(
-            posted=posted, scored_below=scored_below, usage=usage, lag=lag, drafted=drafted
-        )
+        return RadarState(posted=posted, scored_below=scored_below, usage=usage, lag=lag)
 
     def persist(self, state: RadarState, message: str) -> None:
         save_state(self.directory, state)
