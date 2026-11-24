@@ -195,7 +195,6 @@
  },
  "radar_minutes": {
   "simplify": [
-   277.5,
    64.8,
    56.8,
    56.8,
@@ -394,7 +393,8 @@
    286.9,
    104.3,
    89.7,
-   74.1
+   74.1,
+   58.5
   ],
   "ashby": [
    14.8,
@@ -623,7 +623,6 @@
   ]
  },
  "simplify_delay_minutes": [
-  -1082.6,
   -1083.7,
   -772.9,
   -1122.4,
@@ -822,7 +821,8 @@
   -1350.1,
   -871.9,
   42.6,
-  0.0
+  0.0,
+  61993.0
  ],
  "measured_pairs": [
   "simplify:3f12b8ac-a406-4397-9458-ea07e6d144b3",
@@ -1519,9 +1519,10 @@
   "simplify:76127016-50b2-48d1-99eb-f720b5ff3a2d",
   "simplify:a628d336-09fd-45c3-bd3c-fcfe8c92c533",
   "simplify:6eff9788-f38e-4357-8646-cd6f5984f3cb",
-  "simplify:9f6de892-81cb-4bb0-8e0f-667d26ee241a"
+  "simplify:9f6de892-81cb-4bb0-8e0f-667d26ee241a",
+  "simplify:637771ab-fcba-4414-9c25-99bfe21fa777"
  ],
  "board_failures": {
-  "ashby/f7d8749a-72d6-407c-bf98-292ea630c73a": 47
+  "ashby/f7d8749a-72d6-407c-bf98-292ea630c73a": 48
  }
 }
