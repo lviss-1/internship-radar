@@ -16,7 +16,7 @@
  "day": "2026-11-24",
  "day_calls": 1,
  "budget_alert_day": "",
- "heartbeat_day": "2026-11-23",
+ "heartbeat_day": "2026-11-24",
  "alerts_sent": {
   "board_down:ashby/f7d8749a-72d6-407c-bf98-292ea630c73a": "2026-11-24T08:00:29.733129+00:00"
  }
